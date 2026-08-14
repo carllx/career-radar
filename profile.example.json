@@ -1,0 +1,36 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "candidate": {
+    "title": "Full Stack Engineer / AI Systems Architect",
+    "target_roles": [
+      "Senior Full Stack Engineer",
+      "AI Engineer",
+      "Agentic Systems Developer"
+    ],
+    "skills": [
+      "TypeScript",
+      "Node.js",
+      "Python",
+      "React",
+      "Next.js",
+      "LLMs / Agents",
+      "PostgreSQL"
+    ],
+    "experience_years": 5,
+    "location_preferences": {
+      "remote": true,
+      "preferred_locations": ["Remote", "Singapore", "Tokyo", "Hong Kong", "US/EU Remote"],
+      "relocation": false
+    },
+    "languages": [
+      { "language": "English", "proficiency": "Professional" },
+      { "language": "Chinese", "proficiency": "Native" }
+    ],
+    "salary_expectation": {
+      "currency": "USD",
+      "minimum": 100000
+    },
+    "blacklisted_companies": [],
+    "target_companies": []
+  }
+}
