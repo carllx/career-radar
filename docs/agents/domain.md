@@ -1,17 +1,17 @@
 # Domain Docs
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+工程技能在探索代码库时如何读取和消费本项目的领域文档。
 
-## Before exploring, read these
+## 探索代码库前需阅读的文件
 
-- **`CONTEXT.md`** at the repo root
-- **`docs/adr/`** — read ADRs that touch the area you're about to work in
+- 根目录下的 **`CONTEXT.md`**
+- **`docs/adr/`** 目录 — 阅读涉及你即将工作区域的 ADR 文档
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+如果上述任何文件尚不存在，**请静默继续（Proceed silently）**。不要将其缺失作为异常报错，也不要主动提议提前创建它们。`/domain-modeling` 技能（通过 `/grill-with-docs` 或 `/improve-codebase-architecture` 触发）会在专业术语或架构决策真正得到确认时，以 **懒创建（Lazy Creation）** 的方式生成它们。
 
-## File structure
+## 文件组织结构
 
-Single-context repo (this repository):
+单一 Context 仓库布局（本项目）：
 
 ```
 /
@@ -20,14 +20,14 @@ Single-context repo (this repository):
 └── src/
 ```
 
-## Use the glossary's vocabulary
+## 使用术语表中的标准词汇
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+当输出中提及领域概念时（例如在 Issue 标题、重构建议、假设、测试用例名称中），必须使用 `CONTEXT.md` 中已定义的专业术语。不要随意使用术语表中明确避免的同义词。
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+如果所需的领域概念尚未收录在术语表中，这是一个明确的信号——要么你正在创造该项目未曾使用的新词（请重新审视），要么确实存在概念空白（请标记出来供 `/domain-modeling` 补充）。
 
-## Flag ADR conflicts
+## 标记与已有 ADR 的冲突
 
-If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
+如果你的输出或设计提议与现有的 ADR 产生矛盾，必须显式指出来，而不是静默覆盖：
 
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+> _与 ADR-0007（事件溯源订单）冲突 — 但有必要重新探讨，原因是……_
