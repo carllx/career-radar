@@ -32,6 +32,7 @@ def fetch_and_extract_first_party_announcement(
     source_name: str,
     cache_dir: Optional[Path] = None,
     verify_ssl: bool = True,
+    recruiting_organization: Optional[str] = None,
 ) -> Tuple[List[SourceObservation], Dict[str, Any]]:
     """
     Fetches a live first-party announcement page, downloads its discovered attachments,
@@ -96,6 +97,7 @@ def fetch_and_extract_first_party_announcement(
         source_id=source_id,
         source_name=source_name,
         local_attachment_paths=downloaded_attachments,
+        recruiting_organization=recruiting_organization,
         observed_at=fetched.get("fetched_at"),
     )
 
@@ -124,6 +126,7 @@ def fetch_and_extract_first_party_announcement(
         "source_url": announcement_url,
         "source_id": source_id,
         "source_name": source_name,
+        "recruiting_organization": recruiting_organization,
         "verify_ssl": verify_ssl,
         "attachment_access": attachment_access,
         "extraction_completeness": extraction_completeness,

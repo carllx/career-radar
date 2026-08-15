@@ -27,10 +27,14 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
     ws.title = "岗位表"
 
     # Header
-    ws.append(["序号", "用人部门", "岗位名称", "学历学位要求", "专业及代码", "年龄要求", "能力要求", "工作地点", "岗位类别"])
+    ws.append([
+        "序号", "招聘单位", "工作部门", "岗位名称", "学历学位要求", "专业及代码",
+        "年龄要求", "能力要求", "工作地点", "岗位等级"
+    ])
     # Row 1 (Position 1)
     ws.append([
         "1",
+        "广东药科大学",
         "信息工程学院",
         "数字媒体应用技术专任教师",
         "硕士研究生及以上学历并取得硕士学位",
@@ -38,11 +42,12 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
         "35周岁以下",
         "能胜任UI交互设计、3D制作等专业课程",
         "广州",
-        "专任教师",
+        "专业技术岗位十一级以上",
     ])
     # Row 2 (Position 2)
     ws.append([
         "2",
+        "广东药科大学",
         "数理学院",
         "理论物理学科带头人",
         "博士研究生并取得博士学位",
@@ -50,7 +55,7 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
         "28周岁以下",
         "需具备海外全英文主讲经历",
         "广州",
-        "学科带头人",
+        "专业技术岗位四级以上",
     ])
 
     xlsx_path = tmp_path / "attachment_posts.xlsx"
@@ -178,10 +183,11 @@ def test_announcement_extractor_slices_one_announcement_to_n_observations(
     extractor = AnnouncementExtractor(cache_dir=tmp_path / ".data" / "announcements")
     observations = extractor.extract_from_html_and_attachments(
         html_content=html_content,
-        source_url="http://hrss.gd.gov.cn/zwgk/gsgg/content_202601.html",
+        source_url="http://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/content_202601.html",
         source_id="gd_hrss_official",
         source_name="广东省人力资源和社会保障厅",
         local_attachment_paths=[sample_xlsx_fixture],
+        recruiting_organization="广东药科大学",
     )
 
     # 1 Announcement -> 2 SourceObservations
@@ -189,18 +195,23 @@ def test_announcement_extractor_slices_one_announcement_to_n_observations(
 
     obs_1 = observations[0]
     assert obs_1.job_title == "数字媒体应用技术专任教师"
-    assert "信息工程学院" in obs_1.organization
+    # Organization must be canonical institution, not department
+    assert obs_1.organization == "广东药科大学"
     assert obs_1.location == "广州"
-    assert obs_1.track == "专任教师"
+    # Track must NOT be mapped from 岗位等级
+    assert obs_1.track == ""
     assert "35周岁以下" in obs_1.extracted_requirements["age_text"]
     assert "硕士研究生" in obs_1.extracted_requirements["education_text"]
     assert obs_1.provenance is not None
     assert obs_1.provenance["file_name"] == "attachment_posts.xlsx"
     assert obs_1.provenance["row_index"] == 2
-    assert "raw_cells" in obs_1.provenance
+    assert obs_1.provenance["department"] == "信息工程学院"
+    assert obs_1.provenance["raw_cells"]["岗位等级"] == "专业技术岗位十一级以上"
 
     obs_2 = observations[1]
     assert obs_2.job_title == "理论物理学科带头人"
+    assert obs_2.organization == "广东药科大学"
+    assert obs_2.provenance["department"] == "数理学院"
     assert "28周岁以下" in obs_2.extracted_requirements["age_text"]
     assert "博士研究生" in obs_2.extracted_requirements["education_text"]
 
@@ -227,7 +238,7 @@ def test_announcement_extractor_no_silent_fallback_on_failed_attachments(tmp_pat
         source_url="https://rsc.example.edu.cn/recruit/001.html",
         source_id="example_rsc",
         source_name="某大学人事处",
-        local_attachment_paths=[],  # No local attachments downloaded / failed
+        local_attachment_paths=[],
     )
 
     # STRICT ASSERTION: Zero fake observations created!
@@ -256,10 +267,11 @@ def test_first_party_announcement_to_daily_digest_seam(
     extractor = AnnouncementExtractor(cache_dir=tmp_path / ".data" / "announcements")
     observations = extractor.extract_from_html_and_attachments(
         html_content=html_content,
-        source_url="http://hrss.gd.gov.cn/zwgk/gsgg/content_test.html",
+        source_url="http://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/content_test.html",
         source_id="gd_hrss_official",
         source_name="广东省人力资源和社会保障厅",
         local_attachment_paths=[sample_xlsx_fixture],
+        recruiting_organization="广东药科大学",
     )
     assert len(observations) == 2
 
@@ -312,6 +324,7 @@ def test_first_party_announcement_to_daily_digest_seam(
         records = [json.loads(line) for line in f if line.strip()]
     assert len(records) == 2
     assert records[0]["job_title"] == "数字媒体应用技术专任教师"
+    assert records[0]["organization"] == "广东药科大学"
     assert records[0]["latest_evaluation"]["final_recommendation"] == "建议关注"
 
     # Check report
@@ -319,4 +332,5 @@ def test_first_party_announcement_to_daily_digest_seam(
     assert report_file.exists()
     content = report_file.read_text(encoding="utf-8")
     assert "数字媒体应用技术专任教师" in content
-    assert "http://hrss.gd.gov.cn/zwgk/gsgg/content_test.html" in content
+    assert "广东药科大学" in content
+    assert "http://hrss.gd.gov.cn/zwgk/sydwzp/zpgg/content_test.html" in content

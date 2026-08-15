@@ -32,6 +32,7 @@ class AnnouncementExtractor:
         source_id: str,
         source_name: str,
         local_attachment_paths: Optional[List[Path]] = None,
+        recruiting_organization: Optional[str] = None,
         observed_at: Optional[str] = None,
     ) -> List[SourceObservation]:
         if not observed_at:
@@ -40,9 +41,6 @@ class AnnouncementExtractor:
         parsed_html = self.html_parser.parse(html_content, base_url=source_url)
         announcement_title = parsed_html["title"] or "招聘公告"
         announcement_id = f"ann_{hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:12]}"
-
-        # Base organization name strictly from authoritative source metadata
-        org_name = source_name
 
         observations: List[SourceObservation] = []
         attachment_paths = local_attachment_paths or []
@@ -99,15 +97,23 @@ class AnnouncementExtractor:
                         "other_conditions_text": self._find_matching_cell(cells, ["其他条件", "其他要求", "招聘条件", "备注", "说明"]),
                     }
 
-                    # Determine row-level organization / department if present
-                    row_org = self._find_matching_cell(cells, ["招聘单位", "用人单位", "用人部门", "单位名称", "工作部门", "学院"])
-                    effective_org = row_org if row_org else org_name
+                    # Determine canonical recruiting organization (institution-level)
+                    row_inst = self._find_matching_cell(cells, ["招聘单位", "用人单位", "单位名称", "招聘机构", "用人机构"])
+                    if row_inst:
+                        effective_org = row_inst
+                    elif recruiting_organization:
+                        effective_org = recruiting_organization
+                    else:
+                        effective_org = ""
+
+                    # Department / faculty level (preserved in provenance, never confused with organization)
+                    department = self._find_matching_cell(cells, ["工作部门", "用人部门", "学院", "系所", "所属部门", "招聘部门"])
 
                     # Determine row-level location if present in cells (NO hardcoded location)
                     location = self._find_matching_cell(cells, ["考区", "工作地点", "地点", "城市", "工作地", "所在校区", "校区"])
 
-                    # Determine row-level track if present in cells (NO hardcoded track)
-                    track = self._find_matching_cell(cells, ["岗位类别", "岗位类型", "招聘类别", "岗位性质", "岗位等级"])
+                    # Determine row-level canonical track (NO job rank / grade mapping)
+                    track = self._find_matching_cell(cells, ["招聘赛道", "业务赛道", "目标赛道"])
 
                     obs_id = f"obs_{announcement_id}_{att_path.stem}_{row_idx}"
                     obs = SourceObservation(
@@ -128,6 +134,7 @@ class AnnouncementExtractor:
                             "file_name": att_path.name,
                             "sheet_name": table.get("sheet_name"),
                             "row_index": row_idx,
+                            "department": department,
                             "raw_cells": cells,
                         },
                     )
