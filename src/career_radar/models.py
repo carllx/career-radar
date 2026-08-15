@@ -19,6 +19,7 @@ CANONICAL_DIMENSIONS = [
 
 VALID_EVIDENCE_STATES = {"PASS", "REVIEW", "FAIL", "UNKNOWN", "N/A"}
 VALID_RECOMMENDATIONS = {"建议关注", "需要人工确认", "明显不符合"}
+VALID_RESOLUTION_OUTCOMES = {"same", "update", "different", "uncertain"}
 
 
 @dataclass
@@ -62,6 +63,15 @@ class DimensionEvaluation:
             "rationale": self.rationale,
         }
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "DimensionEvaluation":
+        return cls(
+            dimension=data["dimension"],
+            state=data["state"],
+            requirement_evidence=data.get("requirement_evidence", ""),
+            rationale=data.get("rationale", ""),
+        )
+
 
 @dataclass
 class EvaluationResult:
@@ -77,6 +87,43 @@ class EvaluationResult:
             },
             "evaluated_at": self.evaluated_at,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EvaluationResult":
+        dim_evals = {
+            k: DimensionEvaluation.from_dict(v)
+            for k, v in data.get("dimension_evaluations", {}).items()
+        }
+        return cls(
+            final_recommendation=data["final_recommendation"],
+            dimension_evaluations=dim_evals,
+            evaluated_at=data.get("evaluated_at", datetime.now().isoformat()),
+        )
+
+
+@dataclass
+class EntityResolutionDecision:
+    resolution: str  # same / update / different / uncertain
+    target_opportunity_id: Optional[str] = None
+    rationale: str = ""
+    diff_summary: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "resolution": self.resolution,
+            "target_opportunity_id": self.target_opportunity_id,
+            "rationale": self.rationale,
+            "diff_summary": self.diff_summary,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "EntityResolutionDecision":
+        return cls(
+            resolution=data["resolution"],
+            target_opportunity_id=data.get("target_opportunity_id"),
+            rationale=data.get("rationale", ""),
+            diff_summary=data.get("diff_summary"),
+        )
 
 
 @dataclass
@@ -99,12 +146,12 @@ class SourceObservation:
     def from_dict(cls, data: Dict[str, Any]) -> "SourceObservation":
         return cls(
             observation_id=data["observation_id"],
-            announcement_id=data["announcement_id"],
-            source_id=data["source_id"],
+            announcement_id=data.get("announcement_id", ""),
+            source_id=data.get("source_id", ""),
             source_name=data.get("source_name", ""),
             announcement_title=data.get("announcement_title", ""),
-            job_title=data["job_title"],
-            organization=data["organization"],
+            job_title=data.get("job_title", ""),
+            organization=data.get("organization", ""),
             location=data.get("location", ""),
             track=data.get("track", ""),
             official_url=data.get("official_url", ""),
@@ -146,9 +193,56 @@ class Opportunity:
     latest_evaluation: EvaluationResult
     created_at: str
     updated_at: str
+    change_diff: Optional[Dict[str, Any]] = None
+    update_summary: Optional[str] = None
+    uncertain_links: List[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Opportunity":
+        raw_obs = data.get("observations", [])
+        obs_list = []
+        for o in raw_obs:
+            if "job_title" in o:
+                obs_list.append(SourceObservation.from_dict(o))
+            else:
+                obs_list.append(
+                    SourceObservation(
+                        observation_id=o.get("observation_id", ""),
+                        announcement_id=o.get("announcement_id", ""),
+                        source_id=o.get("source_id", ""),
+                        source_name=o.get("source_name", ""),
+                        announcement_title=o.get("announcement_title", ""),
+                        job_title=data.get("job_title", data.get("canonical_job_title", "")),
+                        organization=data.get("organization", ""),
+                        location=data.get("location", ""),
+                        track=data.get("track", ""),
+                        official_url=data.get("official_url", ""),
+                        observed_at=o.get("observed_at", data.get("created_at", "")),
+                        extracted_requirements=o.get("extracted_requirements", {}),
+                        provenance=o.get("provenance"),
+                    )
+                )
+
+        eval_result = EvaluationResult.from_dict(data["latest_evaluation"])
+        return cls(
+            opportunity_id=data["opportunity_id"],
+            canonical_job_title=data.get("job_title", data.get("canonical_job_title", "")),
+            organization=data.get("organization", ""),
+            location=data.get("location", ""),
+            track=data.get("track", ""),
+            official_url=data.get("official_url", ""),
+            lifecycle_status=data.get("lifecycle_status", "active"),
+            observations=obs_list,
+            latest_evaluation=eval_result,
+            created_at=data.get("created_at", datetime.now().isoformat()),
+            updated_at=data.get("updated_at", datetime.now().isoformat()),
+            change_diff=data.get("change_diff"),
+            update_summary=data.get("update_summary"),
+            uncertain_links=data.get("uncertain_links", []),
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        res = {
             "opportunity_id": self.opportunity_id,
             "job_title": self.canonical_job_title,
             "organization": self.organization,
@@ -156,15 +250,14 @@ class Opportunity:
             "track": self.track,
             "official_url": self.official_url,
             "lifecycle_status": self.lifecycle_status,
-            "observations": [
-                {
-                    "observation_id": obs.observation_id,
-                    "source_id": obs.source_id,
-                    "observed_at": obs.observed_at,
-                }
-                for obs in self.observations
-            ],
+            "observations": [obs.to_dict() for obs in self.observations],
             "latest_evaluation": self.latest_evaluation.to_dict(),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "uncertain_links": self.uncertain_links,
         }
+        if self.change_diff:
+            res["change_diff"] = self.change_diff
+        if self.update_summary:
+            res["update_summary"] = self.update_summary
+        return res

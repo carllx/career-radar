@@ -26,8 +26,8 @@ class OpportunityStore:
     def save_opportunities(self, opportunities: List[Opportunity]) -> None:
         """
         Saves opportunities atomically using a temporary file and replace.
+        Updates existing opportunities by ID or appends new ones.
         """
-        # Read existing records
         existing_map = {}
         if self.opps_file.exists():
             with open(self.opps_file, "r", encoding="utf-8") as f:
@@ -36,11 +36,9 @@ class OpportunityStore:
                         item = json.loads(line)
                         existing_map[item["opportunity_id"]] = item
 
-        # Update or add new
         for opp in opportunities:
             existing_map[opp.opportunity_id] = opp.to_dict()
 
-        # Write to temporary file in the same directory (ensuring atomic rename across same filesystem)
         temp_file_fd, temp_file_path = tempfile.mkstemp(
             dir=str(self.data_dir), prefix="opps_", suffix=".tmp"
         )
@@ -51,7 +49,6 @@ class OpportunityStore:
                 f.flush()
                 os.fsync(f.fileno())
 
-            # Atomic replace
             os.replace(temp_file_path, self.opps_file)
         except Exception:
             if os.path.exists(temp_file_path):
@@ -60,7 +57,7 @@ class OpportunityStore:
 
     def load_all(self) -> List[dict]:
         """
-        Loads all opportunities from disk.
+        Loads all raw opportunity records from disk.
         """
         if not self.opps_file.exists():
             return []
@@ -70,3 +67,10 @@ class OpportunityStore:
                 if line.strip():
                     items.append(json.loads(line))
         return items
+
+    def load_all_opportunities(self) -> List[Opportunity]:
+        """
+        Loads all opportunities as typed domain objects from disk.
+        """
+        raw_items = self.load_all()
+        return [Opportunity.from_dict(item) for item in raw_items]

@@ -1,11 +1,12 @@
 """
 Daily Markdown Digest generator for Career Radar.
 Implements ADR-0004 (high signal-to-noise structured reporting).
+Respects Issue #11 incremental entity resolution presentation.
 """
 
 from datetime import datetime
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .models import Opportunity
 
@@ -24,29 +25,47 @@ class DigestReporter:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
     def generate_report(
-        self, opportunities: List[Opportunity], run_date: str
+        self,
+        opportunities: List[Opportunity],
+        run_date: str,
+        new_opportunity_ids: Optional[List[str]] = None,
+        updated_opportunity_ids: Optional[List[str]] = None,
     ) -> Path:
         report_path = self.reports_dir / f"{run_date}.md"
 
+        # Determine target scope for report
+        if new_opportunity_ids is not None or updated_opportunity_ids is not None:
+            active_new_ids = set(new_opportunity_ids or [])
+            active_update_ids = set(updated_opportunity_ids or [])
+            target_opps = [
+                o for o in opportunities
+                if o.opportunity_id in active_new_ids or o.opportunity_id in active_update_ids
+            ]
+        else:
+            target_opps = opportunities
+
         recommended = [
             o
-            for o in opportunities
-            if o.latest_evaluation.final_recommendation == "建议关注"
+            for o in target_opps
+            if o.latest_evaluation
+            and o.latest_evaluation.final_recommendation == "建议关注"
+            and o.lifecycle_status != "updated"
         ]
         review_needed = [
             o
-            for o in opportunities
-            if o.latest_evaluation.final_recommendation == "需要人工确认"
+            for o in target_opps
+            if (o.latest_evaluation and o.latest_evaluation.final_recommendation == "需要人工确认")
+            or o.uncertain_links
         ]
         updated_posts = [
-            o for o in opportunities if o.lifecycle_status == "updated"
+            o for o in target_opps if o.lifecycle_status == "updated"
         ]
 
         lines = [
             f"# Career Radar 每日求职情报简报 ({run_date})",
             "",
             f"> **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
-            f"> **本次巡检机会总数**：{len(opportunities)} 篇 | 强烈推荐：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
+            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 强烈推荐：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
             "",
             "---",
             "",
@@ -84,7 +103,10 @@ class DigestReporter:
             lines.append("本次巡检暂无历史岗位补充公告或延期变更。\n")
         else:
             for opp in updated_posts:
-                lines.append(f"- **{opp.organization}** · [{opp.canonical_job_title}]({opp.official_url})：状态更新")
+                update_desc = opp.update_summary or "状态更新"
+                lines.append(
+                    f"- **{opp.organization}** · [{opp.canonical_job_title}]({opp.official_url})：{update_desc}"
+                )
 
         lines.extend([
             "",
@@ -104,16 +126,21 @@ class DigestReporter:
             f"### [{opp.canonical_job_title}]({opp.official_url})",
             f"- **用人单位**：{opp.organization}",
             f"- **地点/赛道**：{opp.location} | {opp.track}",
-            f"- **推荐结论**：`{opp.latest_evaluation.final_recommendation}`",
-            "- **多维资格判定与原文证据 (Requirement Evidence)**：",
+            f"- **推荐结论**：`{opp.latest_evaluation.final_recommendation if opp.latest_evaluation else '待评定'}`",
         ]
-        for dim, ev in opp.latest_evaluation.dimension_evaluations.items():
-            state_badge = f"`{ev.state}`"
-            evidence_snippet = (
-                f"“{ev.requirement_evidence}”" if ev.requirement_evidence else "（无）"
-            )
-            lines.append(
-                f"  - **{dim}** {state_badge}：{ev.rationale}  \n    *证据原文*：{evidence_snippet}"
-            )
+        if opp.uncertain_links:
+            links_str = ", ".join(opp.uncertain_links)
+            lines.append(f"- **实体消歧状态**：`实体同一性待确认`（与既有岗位 `{links_str}` 存在部分重合但证据不足）")
+
+        if opp.latest_evaluation and opp.latest_evaluation.dimension_evaluations:
+            lines.append("- **多维资格判定与原文证据 (Requirement Evidence)**：")
+            for dim, ev in opp.latest_evaluation.dimension_evaluations.items():
+                state_badge = f"`{ev.state}`"
+                evidence_snippet = (
+                    f"“{ev.requirement_evidence}”" if ev.requirement_evidence else "（无）"
+                )
+                lines.append(
+                    f"  - **{dim}** {state_badge}：{ev.rationale}  \n    *证据原文*：{evidence_snippet}"
+                )
         lines.append("")
         return lines
