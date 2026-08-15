@@ -1,6 +1,6 @@
 # CONTEXT.md — 领域模型与统一语言词汇表 (Glossary)
 
-本文件是 `career-radar` 项目的统一语言（Ubiquitous Language）定义。所有工单、代码标识符、Prompt 与文档必须严格使用本词汇表中的术语。
+本文件是 `career-radar` 项目的统一语言（Ubiquitous Language）定义。涉及本项目领域概念时，应优先使用本词汇表中的 canonical terms，避免同一概念出现多个冲突名称。
 
 ---
 
@@ -32,15 +32,17 @@
 来自用户私有本地配置的真实资质事实凭证（如学历、工作年限、实战技能）。
 
 ### Evidence State（证据状态）
-Agent 对某个适用维度进行语义推演后的证据完备度与合规度评价，仅允许取五态之一：
+Agent 对某个适用维度进行语义推演后的证据状态评价，包含五个 canonical states：
 - `PASS`：已有充分证据确认满足；
-- `REVIEW`：已有证据，但存在放宽条款、歧义或需要人工进一步判断；
-- `FAIL`：已有权威证据确认不满足硬性门槛且无适用放宽；
-- `UNKNOWN`：信息重要但当前证据不足（触发 Agent 进一步自主查证，查证未果保留 UNKNOWN）；
-- `N/A`：该维度对当前岗位类型不适用。
+- `REVIEW`：已有证据，但存在放宽条款、歧义或需进一步判断；
+- `FAIL`：已有权威证据确认不满足硬门槛且无适用放宽；
+- `UNKNOWN`：信息重要但当前证据不足；
+- `N/A`：该维度对当前岗位不适用。
+
+具体判断与聚合规则参见 [`docs/adr/0001-agent-driven-discrete-matching-protocol.md`](docs/adr/0001-agent-driven-discrete-matching-protocol.md)。
 
 ### Eligibility（资格合规性）
-候选人与岗位硬性法定准入条件的符合程度（涵盖 `Age`、`Education`、`Formal Qualification` 等）。
+候选人与岗位法定准入条件的符合程度（涵盖 `Age`、`Education`、`Formal Qualification` 等）。
 
 ### Formal Qualification（正式专业资格）
 依据招聘公告指定的正式专业目录、专业代码或学科分类标准所界定的法定专业准入门槛。
@@ -52,7 +54,9 @@ Agent 对某个适用维度进行语义推演后的证据完备度与合规度�
 在具备充分第一方证据的前提下，某一硬性维度求值为 `FAIL` 时的全局熔断状态，导致该岗位直接判定为 `明显不符合`。
 
 ### Final Recommendation（最终推荐结论）
-Agent 综合各维度证据状态输出的最终三态决策：
-- `建议关注`：无 `FAIL`、无 `REVIEW`，核心维度 `PASS`；
-- `需要人工确认`：无 `FAIL`，但存在 `REVIEW` 或补查后仍保留 `UNKNOWN`；
-- `明显不符合`：命中至少一项权威第一方确认的 `Hard Blocker`。
+Agent 综合各维度证据状态输出的最终三态决策，包含三个 canonical outcomes：
+- `建议关注`
+- `需要人工确认`
+- `明显不符合`
+
+具体聚合规则参见 [`docs/adr/0001-agent-driven-discrete-matching-protocol.md`](docs/adr/0001-agent-driven-discrete-matching-protocol.md)。
