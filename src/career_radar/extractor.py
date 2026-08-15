@@ -41,12 +41,8 @@ class AnnouncementExtractor:
         announcement_title = parsed_html["title"] or "招聘公告"
         announcement_id = f"ann_{hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:12]}"
 
-        # Base organization name from source_name or announcement title
+        # Base organization name strictly from authoritative source metadata
         org_name = source_name
-        for prefix in ["广东轻工职业技术大学", "广东药科大学", "华南师范大学", "中山大学", "华南理工大学", "广州大学", "广州番禺职业技术学院"]:
-            if prefix in announcement_title:
-                org_name = prefix
-                break
 
         observations: List[SourceObservation] = []
         attachment_paths = local_attachment_paths or []
@@ -74,20 +70,20 @@ class AnnouncementExtractor:
                         continue
 
                     # Education & Degree combination
-                    edu = self._find_matching_cell(cells, ["学历要求", "学历学位要求", "最低学历", "学历"])
-                    deg = self._find_matching_cell(cells, ["学位要求", "最低学位", "学位"])
-                    if edu and deg and edu != deg:
-                        education_text = f"{edu}（{deg}）"
+                    education_req = self._find_matching_cell(cells, ["学历要求", "学历学位要求", "最低学历", "学历"])
+                    degree_req = self._find_matching_cell(cells, ["学位要求", "最低学位", "学位"])
+                    if education_req and degree_req and education_req != degree_req:
+                        education_text = f"{education_req}（{degree_req}）"
                     else:
-                        education_text = edu or deg
+                        education_text = education_req or degree_req
 
                     # Age combination
-                    age = self._find_matching_cell(cells, ["年龄要求", "年龄", "年龄上限"])
-                    rel = self._find_matching_cell(cells, ["（放宽年龄）硕士研究生年龄要求", "放宽年龄要求", "放宽年龄"])
-                    if age and rel:
-                        age_text = f"{age}（放宽：{rel}）"
+                    age_req = self._find_matching_cell(cells, ["年龄要求", "年龄", "年龄上限"])
+                    relaxed_age = self._find_matching_cell(cells, ["（放宽年龄）硕士研究生年龄要求", "放宽年龄要求", "放宽年龄"])
+                    if age_req and relaxed_age:
+                        age_text = f"{age_req}（放宽：{relaxed_age}）"
                     else:
-                        age_text = age or rel
+                        age_text = age_req or relaxed_age
 
                     # Extract discrete requirement texts verbatim from cells
                     req_dict = {
@@ -107,10 +103,10 @@ class AnnouncementExtractor:
                     row_org = self._find_matching_cell(cells, ["招聘单位", "用人单位", "用人部门", "单位名称", "工作部门", "学院"])
                     effective_org = row_org if row_org else org_name
 
-                    # Determine row-level location if present in cells (NO hardcoded Guangzhou)
+                    # Determine row-level location if present in cells (NO hardcoded location)
                     location = self._find_matching_cell(cells, ["考区", "工作地点", "地点", "城市", "工作地", "所在校区", "校区"])
 
-                    # Determine row-level track if present in cells (NO hardcoded higher_education_teaching)
+                    # Determine row-level track if present in cells (NO hardcoded track)
                     track = self._find_matching_cell(cells, ["岗位类别", "岗位类型", "招聘类别", "岗位性质", "岗位等级"])
 
                     obs_id = f"obs_{announcement_id}_{att_path.stem}_{row_idx}"

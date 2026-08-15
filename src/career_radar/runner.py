@@ -100,13 +100,15 @@ def fetch_and_extract_first_party_announcement(
     )
 
     # Determine extraction completeness and mechanical technical status
-    has_captcha_block = any(
-        r.get("status") in {"blocked_by_captcha", "content_type_mismatch"}
-        for r in attachment_reports
-    )
-    if has_captcha_block:
+    has_captcha = any(r.get("status") == "blocked_by_captcha" for r in attachment_reports)
+    has_type_mismatch = any(r.get("status") == "content_type_mismatch" for r in attachment_reports)
+
+    if has_captcha:
         extraction_completeness = "incomplete"
         attachment_access = "blocked_by_captcha"
+    elif has_type_mismatch:
+        extraction_completeness = "incomplete"
+        attachment_access = "content_type_mismatch"
     elif downloaded_attachments and not observations:
         extraction_completeness = "incomplete_or_no_jobs"
         attachment_access = "success"

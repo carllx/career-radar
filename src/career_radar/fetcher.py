@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import unquote, urljoin
 import requests
 
 
@@ -127,8 +127,8 @@ class AnnouncementFetcher:
         Downloads an attachment file into the announcement's cache entry directory.
         Detects captcha challenges and HTML responses for binary attachment requests.
         """
-        ext = (attachment_meta.get("extension") if attachment_meta else "") or ".xlsx"
-        suggested_name = attachment_meta.get("name") if attachment_meta else ""
+        ext = (attachment_meta.get("extension") if attachment_meta else "") or ""
+        suggested_name = (attachment_meta.get("name") if attachment_meta else "") or ""
         if suggested_name and any(suggested_name.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
             filename = suggested_name
         else:
@@ -136,7 +136,8 @@ class AnnouncementFetcher:
             if any(base.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
                 filename = base
             else:
-                filename = f"attachment_{hashlib.md5(attachment_url.encode()).hexdigest()[:8]}{ext}"
+                fallback_ext = ext if ext else ".xlsx"
+                filename = f"attachment_{hashlib.md5(attachment_url.encode()).hexdigest()[:8]}{fallback_ext}"
 
         target_path = entry_dir / filename
 
@@ -198,14 +199,21 @@ class AnnouncementFetcher:
                 url=attachment_url,
             )
 
-        # Check content disposition if present
+        # Check content disposition if present (supporting RFC 5987 filename* and filename)
         cd = resp.headers.get("content-disposition", "")
-        if "filename=" in cd:
-            import urllib.parse
-            fname_part = cd.split("filename=")[-1].strip("\"'; ")
-            fname_part = urllib.parse.unquote(fname_part)
-            if fname_part and any(fname_part.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
-                target_path = entry_dir / fname_part
+        if cd:
+            extracted_filename = ""
+            if "filename*=" in cd:
+                part = cd.split("filename*=")[-1].split(";")[0].strip("\"' ")
+                if "''" in part:
+                    part = part.split("''")[-1]
+                extracted_filename = unquote(part)
+            elif "filename=" in cd:
+                part = cd.split("filename=")[-1].split(";")[0].strip("\"' ")
+                extracted_filename = unquote(part)
+
+            if extracted_filename and any(extracted_filename.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
+                target_path = entry_dir / extracted_filename
 
         with open(target_path, "wb") as f:
             f.write(content_bytes)
