@@ -31,6 +31,8 @@ credentials.*
 !*example*
 !*.example.*
 profile/local/
+.data/
+reports/
 
 # Dependencies and Build Artifacts
 node_modules/
