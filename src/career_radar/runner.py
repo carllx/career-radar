@@ -223,32 +223,30 @@ def finalize_incremental_run(
     updated_opp_ids: List[str] = []
     deduped_same_count = 0
 
+    # First validate and apply all decisions in memory before persisting
     for obs, decision in zip(observations, resolution_decisions):
+        eval_res = evaluation_results.get(obs.observation_id)
+        if not eval_res and decision.target_opportunity_id:
+            eval_res = evaluation_results.get(decision.target_opportunity_id)
+
+        validated_eval = None
+        if eval_res:
+            validated_eval = EvaluationValidator.validate_and_aggregate(eval_res)
+
         opp, action = applier.apply_decision(
             observation=obs,
             decision=decision,
             opportunities_map=opps_map,
+            evaluation_result=validated_eval,
             current_time=datetime.now().isoformat(),
         )
 
         if action == "deduplicated_same":
             deduped_same_count += 1
-            # same does not alter evaluation or trigger new alert
-
         elif action == "updated_opportunity":
             updated_opp_ids.append(opp.opportunity_id)
-            # Apply re-evaluated evaluation result if provided
-            eval_res = evaluation_results.get(obs.observation_id) or evaluation_results.get(opp.opportunity_id)
-            if eval_res:
-                validated_result = EvaluationValidator.validate_and_aggregate(eval_res)
-                opp.latest_evaluation = validated_result
-
         elif action in ("new_different", "new_uncertain"):
             new_opp_ids.append(opp.opportunity_id)
-            eval_res = evaluation_results.get(obs.observation_id) or evaluation_results.get(opp.opportunity_id)
-            if eval_res:
-                validated_result = EvaluationValidator.validate_and_aggregate(eval_res)
-                opp.latest_evaluation = validated_result
 
     # Persist all mutated/created opportunities atomically
     all_opportunities = list(opps_map.values())
@@ -304,11 +302,20 @@ def finalize_evaluation_run(
     run_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Standard finalize entrypoint for runs without prior entity resolution decisions
-    (defaults to 'different' new opportunities).
+    Standard finalize entrypoint.
+    If prior opportunities exist in store, failing fast is REQUIRED unless explicit Agent resolution is provided.
+    Defaulting to 'different' is permitted ONLY during initial empty-state bootstrap.
     """
+    store = OpportunityStore(Path(data_dir))
+    prior_opps = store.load_all_opportunities()
+    if len(prior_opps) > 0:
+        raise ValueError(
+            f"Prior opportunities exist in store ({len(prior_opps)} records), but no Agent entity resolution was provided. "
+            "Helper is prohibited from assuming 'different' when prior state exists."
+        )
+
     default_decisions = [
-        EntityResolutionDecision(resolution="different", rationale="Default new opportunity")
+        EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
         for _ in observations
     ]
     eval_map = {
@@ -336,6 +343,7 @@ def run_radar_pipeline(
     """
     Unified execution entrypoint across the Highest Testing Seam:
     Prepare -> Resolve Entity (via Agent resolver) -> Evaluate Eligibility -> Finalize.
+    If prior state exists, entity_resolver_fn is strictly required.
     """
     profile, observations, res_packets, _ = prepare_evaluation_run(
         profile_path=profile_path,
@@ -347,6 +355,12 @@ def run_radar_pipeline(
     prior_opps = store.load_all_opportunities()
     retriever = CandidateRetriever()
 
+    if len(prior_opps) > 0 and entity_resolver_fn is None:
+        raise ValueError(
+            f"Prior opportunities exist in store ({len(prior_opps)} records), but no entity_resolver_fn was provided. "
+            "Helper is strictly prohibited from assuming 'different' when prior state exists."
+        )
+
     res_decisions: List[EntityResolutionDecision] = []
     eval_results_map: Dict[str, EvaluationResult] = {}
 
@@ -355,7 +369,7 @@ def run_radar_pipeline(
             candidates = retriever.retrieve_candidates(obs, prior_opps)
             decision = entity_resolver_fn(obs, candidates)
         else:
-            decision = EntityResolutionDecision(resolution="different", rationale="Default new opportunity")
+            decision = EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
         res_decisions.append(decision)
 
         # For different, update, and uncertain: evaluate eligibility

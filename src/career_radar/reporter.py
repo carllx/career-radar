@@ -104,8 +104,9 @@ class DigestReporter:
         else:
             for opp in updated_posts:
                 update_desc = opp.update_summary or "状态更新"
+                update_url = (opp.change_diff or {}).get("latest_official_url") or opp.official_url
                 lines.append(
-                    f"- **{opp.organization}** · [{opp.canonical_job_title}]({opp.official_url})：{update_desc}"
+                    f"- **{opp.organization}** · [{opp.canonical_job_title}]({update_url})：{update_desc}"
                 )
 
         lines.extend([
