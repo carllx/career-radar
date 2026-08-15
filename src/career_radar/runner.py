@@ -1,9 +1,9 @@
 """
 Public transport-neutral runner entrypoint for Career Radar MVP-1.
-Supports the IDE-Agent-facing two-phase workflow:
-1. PREPARE: load inputs / fetch first-party announcements, retrieve candidates, assemble Evidence Packets.
-2. DECIDE: Agent (IDE Agent) performs entity resolution (same/update/different/uncertain) and discrete matching across canonical dimensions.
-3. FINALIZE: mechanically apply resolution, validate schema, aggregate, persist atomically, render Daily Digest.
+Supports the IDE-Agent-facing sequential and batch workflow with in-memory working state:
+1. Sequential Working State: Newly created/updated Opportunities in the SAME Run are immediately visible to subsequent observations' candidate retrieval.
+2. Atomicity: Failure in any observation fails fast; persistent disk store is only written once after the entire batch succeeds.
+3. Seams: Prepare -> Decide (Agent entity resolution + qualification matching) -> Finalize.
 """
 
 from datetime import datetime
@@ -104,7 +104,6 @@ def fetch_and_extract_first_party_announcement(
         observed_at=fetched.get("fetched_at"),
     )
 
-    # Determine extraction completeness and mechanical technical status
     has_captcha = any(r.get("status") == "blocked_by_captcha" for r in attachment_reports)
     has_type_mismatch = any(r.get("status") == "content_type_mismatch" for r in attachment_reports)
 
@@ -140,6 +139,135 @@ def fetch_and_extract_first_party_announcement(
     return observations, report
 
 
+class IncrementalResolutionSession:
+    """
+    Manages sequential in-memory working Opportunity state for a single Run.
+    Ensures earlier results in the same Run are immediately available to later observations
+    for candidate retrieval, while guaranteeing atomic single-shot persistence.
+    """
+
+    def __init__(self, data_dir: Union[str, Path] = ".data"):
+        self.data_dir = Path(data_dir)
+        self.store = OpportunityStore(self.data_dir)
+        self.prior_opportunities = self.store.load_all_opportunities()
+        self.working_map: Dict[str, Opportunity] = {
+            o.opportunity_id: o for o in self.prior_opportunities
+        }
+        self.retriever = CandidateRetriever()
+        self.applier = EntityResolutionApplier()
+        self.staged_observations: List[SourceObservation] = []
+        self.new_opportunity_ids: List[str] = []
+        self.updated_opportunity_ids: List[str] = []
+        self.deduped_same_count = 0
+
+    @property
+    def working_opportunities(self) -> List[Opportunity]:
+        return list(self.working_map.values())
+
+    def prepare_observation_packet(
+        self, observation: SourceObservation
+    ) -> Tuple[Dict[str, Any], List[Opportunity]]:
+        """
+        Retrieves candidates from the current in-memory working state (including opportunities
+        created/updated earlier in this run) and builds the Agent packet.
+        """
+        candidates = self.retriever.retrieve_candidates(observation, self.working_opportunities)
+        packet = build_entity_resolution_packet(observation, candidates)
+        return packet, candidates
+
+    def stage_decision(
+        self,
+        observation: SourceObservation,
+        decision: EntityResolutionDecision,
+        evaluation_result: Optional[EvaluationResult] = None,
+        current_time: Optional[str] = None,
+    ) -> Tuple[Opportunity, str]:
+        """
+        Applies resolution decision to working state.
+        Validates evaluation schemas immediately. Does NOT touch disk.
+        """
+        validated_eval = None
+        if evaluation_result:
+            validated_eval = EvaluationValidator.validate_and_aggregate(evaluation_result)
+
+        opp, action = self.applier.apply_decision(
+            observation=observation,
+            decision=decision,
+            opportunities_map=self.working_map,
+            evaluation_result=validated_eval,
+            current_time=current_time or datetime.now().isoformat(),
+        )
+
+        self.staged_observations.append(observation)
+        if action == "deduplicated_same":
+            self.deduped_same_count += 1
+        elif action == "updated_opportunity":
+            self.updated_opportunity_ids.append(opp.opportunity_id)
+        elif action in ("new_different", "new_uncertain"):
+            self.new_opportunity_ids.append(opp.opportunity_id)
+
+        return opp, action
+
+    def commit_and_finalize(
+        self,
+        reports_dir: Union[str, Path] = "reports",
+        run_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Atomically persists the working state to disk and renders the Daily Digest.
+        """
+        if not run_date:
+            run_date = datetime.now().strftime("%Y-%m-%d")
+
+        all_opportunities = self.working_opportunities
+        self.store.save_opportunities(all_opportunities)
+
+        reports_dir = Path(reports_dir)
+        reporter = DigestReporter(reports_dir)
+        report_file = reporter.generate_report(
+            all_opportunities,
+            run_date=run_date,
+            new_opportunity_ids=self.new_opportunity_ids,
+            updated_opportunity_ids=self.updated_opportunity_ids,
+        )
+
+        recommended_count = sum(
+            1 for o in all_opportunities
+            if o.opportunity_id in self.new_opportunity_ids
+            and o.latest_evaluation
+            and o.latest_evaluation.final_recommendation == "建议关注"
+        )
+        review_count = sum(
+            1 for o in all_opportunities
+            if (o.opportunity_id in self.new_opportunity_ids or o.opportunity_id in self.updated_opportunity_ids)
+            and (
+                (o.latest_evaluation and o.latest_evaluation.final_recommendation == "需要人工确认")
+                or o.uncertain_links
+            )
+        )
+        mismatch_count = sum(
+            1 for o in all_opportunities
+            if o.opportunity_id in self.new_opportunity_ids
+            and o.latest_evaluation
+            and o.latest_evaluation.final_recommendation == "明显不符合"
+        )
+
+        return {
+            "success": True,
+            "run_date": run_date,
+            "total_evaluated": len(self.staged_observations),
+            "total_in_store": len(all_opportunities),
+            "new_opportunities_count": len(self.new_opportunity_ids),
+            "updated_opportunities_count": len(self.updated_opportunity_ids),
+            "deduped_same_count": self.deduped_same_count,
+            "recommended_count": recommended_count,
+            "review_count": review_count,
+            "mismatch_count": mismatch_count,
+            "report_path": str(report_file),
+            "opportunities": [opp.to_dict() for opp in all_opportunities],
+        }
+
+
 def prepare_evaluation_run(
     profile_path: Union[str, Path],
     observations_source: Union[str, Path, List[Dict[str, Any]], List[SourceObservation]],
@@ -148,8 +276,7 @@ def prepare_evaluation_run(
     """
     Phase 1 (Deterministic Helper):
     Loads profile, prior opportunities, and new observations.
-    Retrieves candidates and prepares structured Evidence Packets for both Entity Resolution and Eligibility.
-    Returns (profile, observations, resolution_packets, eligibility_packets).
+    Prepares structured Evidence Packets for both Entity Resolution and Eligibility.
     """
     profile_path = Path(profile_path)
     if not profile_path.exists():
@@ -173,7 +300,6 @@ def prepare_evaluation_run(
     else:
         observations = [SourceObservation.from_dict(obs) for obs in observations_source]  # type: ignore
 
-    # Load prior historical opportunities from store
     store = OpportunityStore(Path(data_dir))
     prior_opportunities = store.load_all_opportunities()
 
@@ -199,99 +325,29 @@ def finalize_incremental_run(
 ) -> Dict[str, Any]:
     """
     Phase 3 (Deterministic Helper):
-    Applies Agent EntityResolutionDecisions to mutate Opportunity state,
-    attaches validated Eligibility evaluations, atomically persists state,
-    and renders the incremental Daily Digest.
+    Applies Agent EntityResolutionDecisions sequentially to mutate in-memory Opportunity working state,
+    validates evaluations, persists atomically once, and renders the incremental Daily Digest.
     """
     if len(observations) != len(resolution_decisions):
         raise ValueError(
             f"Mismatched counts: {len(observations)} observations vs {len(resolution_decisions)} resolution decisions"
         )
 
-    data_dir = Path(data_dir)
-    reports_dir = Path(reports_dir)
+    session = IncrementalResolutionSession(data_dir=data_dir)
 
-    if not run_date:
-        run_date = datetime.now().strftime("%Y-%m-%d")
-
-    store = OpportunityStore(data_dir)
-    prior_opps = store.load_all_opportunities()
-    opps_map: Dict[str, Opportunity] = {o.opportunity_id: o for o in prior_opps}
-
-    applier = EntityResolutionApplier()
-    new_opp_ids: List[str] = []
-    updated_opp_ids: List[str] = []
-    deduped_same_count = 0
-
-    # First validate and apply all decisions in memory before persisting
     for obs, decision in zip(observations, resolution_decisions):
         eval_res = evaluation_results.get(obs.observation_id)
         if not eval_res and decision.target_opportunity_id:
             eval_res = evaluation_results.get(decision.target_opportunity_id)
 
-        validated_eval = None
-        if eval_res:
-            validated_eval = EvaluationValidator.validate_and_aggregate(eval_res)
-
-        opp, action = applier.apply_decision(
+        session.stage_decision(
             observation=obs,
             decision=decision,
-            opportunities_map=opps_map,
-            evaluation_result=validated_eval,
+            evaluation_result=eval_res,
             current_time=datetime.now().isoformat(),
         )
 
-        if action == "deduplicated_same":
-            deduped_same_count += 1
-        elif action == "updated_opportunity":
-            updated_opp_ids.append(opp.opportunity_id)
-        elif action in ("new_different", "new_uncertain"):
-            new_opp_ids.append(opp.opportunity_id)
-
-    # Persist all mutated/created opportunities atomically
-    all_opportunities = list(opps_map.values())
-    store.save_opportunities(all_opportunities)
-
-    # Render Daily Digest
-    reporter = DigestReporter(reports_dir)
-    report_file = reporter.generate_report(
-        all_opportunities,
-        run_date=run_date,
-        new_opportunity_ids=new_opp_ids,
-        updated_opportunity_ids=updated_opp_ids,
-    )
-
-    recommended_count = sum(
-        1 for o in all_opportunities
-        if o.opportunity_id in new_opp_ids and o.latest_evaluation and o.latest_evaluation.final_recommendation == "建议关注"
-    )
-    review_count = sum(
-        1 for o in all_opportunities
-        if (o.opportunity_id in new_opp_ids or o.opportunity_id in updated_opp_ids)
-        and (
-            (o.latest_evaluation and o.latest_evaluation.final_recommendation == "需要人工确认")
-            or o.uncertain_links
-        )
-    )
-    mismatch_count = sum(
-        1 for o in all_opportunities
-        if o.opportunity_id in new_opp_ids and o.latest_evaluation and o.latest_evaluation.final_recommendation == "明显不符合"
-    )
-
-    return {
-        "success": True,
-        "run_date": run_date,
-        "total_evaluated": len(observations),
-        "total_in_store": len(all_opportunities),
-        "new_opportunities_count": len(new_opp_ids),
-        "updated_opportunities_count": len(updated_opp_ids),
-        "deduped_same_count": deduped_same_count,
-        "recommended_count": recommended_count,
-        "review_count": review_count,
-        "mismatch_count": mismatch_count,
-        "report_path": str(report_file),
-        "opportunities": [opp.to_dict() for opp in all_opportunities],
-    }
+    return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
 
 
 def finalize_evaluation_run(
@@ -342,46 +398,51 @@ def run_radar_pipeline(
 ) -> Dict[str, Any]:
     """
     Unified execution entrypoint across the Highest Testing Seam:
-    Prepare -> Resolve Entity (via Agent resolver) -> Evaluate Eligibility -> Finalize.
-    If prior state exists, entity_resolver_fn is strictly required.
+    Sequential working state: each observation's candidate retrieval sees earlier opportunities created in the SAME run.
+    Atomicity: writes to disk only after entire batch succeeds.
     """
-    profile, observations, res_packets, _ = prepare_evaluation_run(
-        profile_path=profile_path,
-        observations_source=observations_source,
-        data_dir=data_dir,
-    )
+    profile_path = Path(profile_path)
+    if not profile_path.exists():
+        raise FileNotFoundError(f"Profile configuration not found: {profile_path}")
 
-    store = OpportunityStore(Path(data_dir))
-    prior_opps = store.load_all_opportunities()
-    retriever = CandidateRetriever()
+    with open(profile_path, "r", encoding="utf-8") as f:
+        raw_profile = yaml.safe_load(f)
+    profile = CandidateProfile.from_dict(raw_profile)
 
-    if len(prior_opps) > 0 and entity_resolver_fn is None:
-        raise ValueError(
-            f"Prior opportunities exist in store ({len(prior_opps)} records), but no entity_resolver_fn was provided. "
-            "Helper is strictly prohibited from assuming 'different' when prior state exists."
-        )
+    if isinstance(observations_source, (str, Path)):
+        obs_file = Path(observations_source)
+        if not obs_file.exists():
+            raise FileNotFoundError(f"Observations file not found: {obs_file}")
+        with open(obs_file, "r", encoding="utf-8") as f:
+            raw_observations = json.load(f)
+        observations = [SourceObservation.from_dict(obs) for obs in raw_observations]
+    elif isinstance(observations_source, list) and observations_source and isinstance(observations_source[0], SourceObservation):
+        observations = observations_source  # type: ignore
+    elif isinstance(observations_source, list) and not observations_source:
+        observations = []
+    else:
+        observations = [SourceObservation.from_dict(obs) for obs in observations_source]  # type: ignore
 
-    res_decisions: List[EntityResolutionDecision] = []
-    eval_results_map: Dict[str, EvaluationResult] = {}
+    session = IncrementalResolutionSession(data_dir=data_dir)
 
-    for obs in observations:
+    for i, obs in enumerate(observations):
+        packet, candidates = session.prepare_observation_packet(obs)
+
         if entity_resolver_fn:
-            candidates = retriever.retrieve_candidates(obs, prior_opps)
             decision = entity_resolver_fn(obs, candidates)
-        else:
+        elif len(session.prior_opportunities) == 0:
+            # Bootstrap initial run compatibility (#9)
             decision = EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
-        res_decisions.append(decision)
+        else:
+            raise ValueError(
+                f"Prior opportunities exist in store ({len(session.prior_opportunities)} records), "
+                "but no entity_resolver_fn was provided. Helper is strictly prohibited from assuming 'different' when prior state exists."
+            )
 
-        # For different, update, and uncertain: evaluate eligibility
+        eval_res = None
         if decision.resolution in ("different", "update", "uncertain"):
             eval_res = evaluator_fn(profile, obs)
-            eval_results_map[obs.observation_id] = eval_res
 
-    return finalize_incremental_run(
-        observations=observations,
-        resolution_decisions=res_decisions,
-        evaluation_results=eval_results_map,
-        data_dir=data_dir,
-        reports_dir=reports_dir,
-        run_date=run_date,
-    )
+        session.stage_decision(obs, decision, eval_res)
+
+    return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
