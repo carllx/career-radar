@@ -6,7 +6,7 @@
 
 - **项目名称**：`career-radar`
 - **代码仓库**：[carllx/career-radar](https://github.com/carllx/career-radar)
-- **当前阶段**：项目启动与规划（Bootstrap / Planning）
+- **当前阶段**：用户验证与产品演进（User Validation / Product Evolution）
 - **项目范围**：单一 Context（Single-context）的自主职业雷达与求职情报追踪系统。
 
 ## 2. 核心安全与隐私红线
@@ -40,10 +40,10 @@
 - **环境隔离**：`agent-reach` 目前是 IDE Agent 的探索与研究工具，**不得预设其为 `career-radar` 产品的运行时依赖**。
 - **依赖决策**：产品实际运行时所需的抓取、搜索、数据管道技术（如是否采用 Firecrawl、Tavily、Brave、原生 HTTP、Headless Browser 等），必须在后续规划阶段通过 Wayfinder 明确讨论并决策。
 
-### 3.4 Planning Gate（规划闸门）
+### 3.4 规格驱动开发与演进准则 (Spec-Driven Evolution)
 
-- **严禁提前实现**：当前仍处于 Bootstrap / Planning 阶段。在完成 `Wayfinder → Spec → Tickets` 完整链路并获得确认前，不得编写任何 Career Radar 的具体产品业务代码（如爬虫、解析器、搜索器、调度器、CI/CD Actions 等）。
-- **领域文档懒创建（Lazy Creation）**：遵循 Matt Pocock Domain Modeling 规范，`CONTEXT.md` 与 `docs/adr/` 不提前创建占位或虚构设计，仅在相关概念或架构决策经过推演确认后逐步生成。
+- **Spec 先行**：新功能或重大模型变更（如 Profile v2、新赛道检索渠道）必须先完成 Issue Spec 与架构推演确认，再进入具体代码实现与 Ticket 拆解。
+- **领域文档维护**：遵循 Matt Pocock Domain Modeling 规范，随着模型演进持续同步维护 `CONTEXT.md` 与 `docs/adr/`，保持统一语言与架构决策的权威一致性。
 
 ## 4. Agent skills
 
