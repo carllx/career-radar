@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from career_radar.extractor import AnnouncementExtractor
+from career_radar.fetcher import AnnouncementFetcher, AttachmentAccessError
 from career_radar.models import (
     CandidateProfile,
     DimensionEvaluation,
@@ -26,7 +27,7 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
     ws.title = "岗位表"
 
     # Header
-    ws.append(["序号", "用人部门", "岗位名称", "学历学位要求", "专业及代码", "年龄要求", "其他条件"])
+    ws.append(["序号", "用人部门", "岗位名称", "学历学位要求", "专业及代码", "年龄要求", "能力要求", "工作地点", "岗位类别"])
     # Row 1 (Position 1)
     ws.append([
         "1",
@@ -35,7 +36,9 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
         "硕士研究生及以上学历并取得硕士学位",
         "计算机科学与技术（0812）、数字媒体（0854）",
         "35周岁以下",
-        "能胜任UI交互设计、3D制作等专业课程；有行业实践经验者优先",
+        "能胜任UI交互设计、3D制作等专业课程",
+        "广州",
+        "专任教师",
     ])
     # Row 2 (Position 2)
     ws.append([
@@ -46,6 +49,8 @@ def sample_xlsx_fixture(tmp_path: Path) -> Path:
         "理论物理（070201）",
         "28周岁以下",
         "需具备海外全英文主讲经历",
+        "广州",
+        "学科带头人",
     ])
 
     xlsx_path = tmp_path / "attachment_posts.xlsx"
@@ -100,6 +105,7 @@ def test_attachment_parser_xlsx(sample_xlsx_fixture: Path):
     assert len(parsed_tables) >= 1
     table = parsed_tables[0]
     assert table["file_type"] == "xlsx"
+    assert table["status"] == "success"
     assert len(table["rows"]) == 2
     assert table["rows"][0]["cells"]["岗位名称"] == "数字媒体应用技术专任教师"
     assert "35周岁以下" in table["rows"][0]["cells"]["年龄要求"]
@@ -113,8 +119,40 @@ def test_attachment_parser_docx(sample_docx_fixture: Path):
     assert len(parsed_tables) >= 1
     table = parsed_tables[0]
     assert table["file_type"] == "docx"
+    assert table["status"] == "success"
     assert len(table["rows"]) == 1
     assert table["rows"][0]["cells"]["岗位名称"] == "人工智能与交互设计教师"
+
+
+def test_attachment_parser_pdf(sample_pdf_fixture: Path):
+    parser = AttachmentParser()
+    parsed_tables = parser.parse_file(sample_pdf_fixture)
+
+    assert len(parsed_tables) >= 1
+    table = parsed_tables[0]
+    assert table["file_type"] == "pdf"
+    assert table["status"] == "success"
+    assert "pages" in table
+
+
+def test_attachment_parser_legacy_unsupported(tmp_path: Path):
+    """Verifies that legacy .xls and .doc files return unsupported_legacy_format without crashing."""
+    xls_path = tmp_path / "legacy.xls"
+    xls_path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")  # mock legacy OLE header
+
+    doc_path = tmp_path / "legacy.doc"
+    doc_path.write_bytes(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")
+
+    parser = AttachmentParser()
+    res_xls = parser.parse_file(xls_path)
+    assert len(res_xls) == 1
+    assert res_xls[0]["status"] == "unsupported_legacy_format"
+    assert res_xls[0]["rows"] == []
+
+    res_doc = parser.parse_file(doc_path)
+    assert len(res_doc) == 1
+    assert res_doc[0]["status"] == "unsupported_legacy_format"
+    assert res_doc[0]["rows"] == []
 
 
 def test_announcement_extractor_slices_one_announcement_to_n_observations(
@@ -123,14 +161,14 @@ def test_announcement_extractor_slices_one_announcement_to_n_observations(
     html_content = f"""
     <!DOCTYPE html>
     <html>
-    <head><title>广东轻工职业技术大学2026年人才招聘公告</title></head>
+    <head><title>广东药科大学2026年人才招聘公告</title></head>
     <body>
-      <div class="article-title">广东轻工职业技术大学2026年公开招聘专任教师公告</div>
+      <div class="article-title">广东药科大学2026年公开招聘专任教师公告</div>
       <div class="publish-time">2026-08-15 09:00</div>
       <div class="content">
         <p>为满足教学科研需要，我校现面向社会公开招聘专任教师。</p>
         <div class="attachment">
-          <a href="{sample_xlsx_fixture.as_uri()}">附件1：广东轻工职业技术大学2026年岗位需求表.xlsx</a>
+          <a href="{sample_xlsx_fixture.as_uri()}">附件1：岗位需求表.xlsx</a>
         </div>
       </div>
     </body>
@@ -151,17 +189,49 @@ def test_announcement_extractor_slices_one_announcement_to_n_observations(
 
     obs_1 = observations[0]
     assert obs_1.job_title == "数字媒体应用技术专任教师"
-    assert "广东轻工职业技术大学" in obs_1.organization
+    assert "信息工程学院" in obs_1.organization
+    assert obs_1.location == "广州"
+    assert obs_1.track == "专任教师"
     assert "35周岁以下" in obs_1.extracted_requirements["age_text"]
     assert "硕士研究生" in obs_1.extracted_requirements["education_text"]
     assert obs_1.provenance is not None
     assert obs_1.provenance["file_name"] == "attachment_posts.xlsx"
     assert obs_1.provenance["row_index"] == 2
+    assert "raw_cells" in obs_1.provenance
 
     obs_2 = observations[1]
     assert obs_2.job_title == "理论物理学科带头人"
     assert "28周岁以下" in obs_2.extracted_requirements["age_text"]
     assert "博士研究生" in obs_2.extracted_requirements["education_text"]
+
+
+def test_announcement_extractor_no_silent_fallback_on_failed_attachments(tmp_path: Path):
+    """
+    CRITICAL BLOCKER 2 TEST:
+    If an announcement references attachments but no valid job table rows can be extracted,
+    it MUST NOT create fake observations from the announcement title. It must return [].
+    """
+    html_content = """
+    <html>
+      <head><title>广东某大学2026年公开招聘工作人员公告</title></head>
+      <body>
+        <h1>广东某大学2026年公开招聘工作人员公告</h1>
+        <p>具体招聘岗位详见附件。</p>
+      </body>
+    </html>
+    """
+
+    extractor = AnnouncementExtractor(cache_dir=tmp_path / ".data" / "announcements")
+    observations = extractor.extract_from_html_and_attachments(
+        html_content=html_content,
+        source_url="https://rsc.example.edu.cn/recruit/001.html",
+        source_id="example_rsc",
+        source_name="某大学人事处",
+        local_attachment_paths=[],  # No local attachments downloaded / failed
+    )
+
+    # STRICT ASSERTION: Zero fake observations created!
+    assert observations == []
 
 
 def test_first_party_announcement_to_daily_digest_seam(
@@ -178,7 +248,7 @@ def test_first_party_announcement_to_daily_digest_seam(
     html_content = f"""
     <html>
       <body>
-        <h1>广东轻工职业技术大学2026年招聘</h1>
+        <h1>广东药科大学2026年招聘</h1>
         <a href="{sample_xlsx_fixture.as_uri()}">附件.xlsx</a>
       </body>
     </html>

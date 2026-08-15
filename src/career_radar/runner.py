@@ -14,7 +14,7 @@ import yaml
 
 from .evaluator import EvaluationValidator, build_evaluation_packet
 from .extractor import AnnouncementExtractor
-from .fetcher import AnnouncementFetcher
+from .fetcher import AnnouncementFetcher, AttachmentAccessError
 from .models import (
     CandidateProfile,
     EvaluationResult,
@@ -31,13 +31,15 @@ def fetch_and_extract_first_party_announcement(
     source_id: str,
     source_name: str,
     cache_dir: Optional[Path] = None,
-) -> List[SourceObservation]:
+    verify_ssl: bool = True,
+) -> Tuple[List[SourceObservation], Dict[str, Any]]:
     """
     Fetches a live first-party announcement page, downloads its discovered attachments,
-    and slices them into discrete SourceObservations.
+    and slices them into discrete SourceObservations without business rules.
+    Returns (observations, extraction_report).
     """
     cache_dir = cache_dir or Path(".data/announcements")
-    fetcher = AnnouncementFetcher(cache_dir=cache_dir)
+    fetcher = AnnouncementFetcher(cache_dir=cache_dir, verify_ssl=verify_ssl)
     fetched = fetcher.fetch_announcement_html(announcement_url)
 
     html_parser = HTMLAnnouncementParser()
@@ -45,17 +47,50 @@ def fetch_and_extract_first_party_announcement(
 
     entry_dir = Path(fetched["entry_dir"])
     downloaded_attachments = []
+    attachment_reports = []
+
     for att in parsed_meta["attachments"]:
+        if not att.get("supported", True):
+            attachment_reports.append({
+                "name": att.get("name"),
+                "url": att.get("url"),
+                "extension": att.get("extension"),
+                "status": "unsupported_legacy_format",
+                "error": f"Legacy format {att.get('extension')} is not supported.",
+            })
+            continue
+
         try:
             local_att = fetcher.download_attachment(
                 att["url"], entry_dir=entry_dir, attachment_meta=att
             )
             downloaded_attachments.append(local_att)
-        except Exception:
-            pass
+            attachment_reports.append({
+                "name": att.get("name"),
+                "url": att.get("url"),
+                "extension": att.get("extension"),
+                "status": "downloaded",
+                "local_path": str(local_att),
+            })
+        except AttachmentAccessError as e:
+            attachment_reports.append({
+                "name": att.get("name"),
+                "url": att.get("url"),
+                "extension": att.get("extension"),
+                "status": e.reason,
+                "error": str(e),
+            })
+        except Exception as e:
+            attachment_reports.append({
+                "name": att.get("name"),
+                "url": att.get("url"),
+                "extension": att.get("extension"),
+                "status": "download_failed",
+                "error": str(e),
+            })
 
     extractor = AnnouncementExtractor(cache_dir=cache_dir)
-    return extractor.extract_from_html_and_attachments(
+    observations = extractor.extract_from_html_and_attachments(
         html_content=fetched["html_content"],
         source_url=announcement_url,
         source_id=source_id,
@@ -63,6 +98,38 @@ def fetch_and_extract_first_party_announcement(
         local_attachment_paths=downloaded_attachments,
         observed_at=fetched.get("fetched_at"),
     )
+
+    # Determine extraction completeness and mechanical technical status
+    has_captcha_block = any(
+        r.get("status") in {"blocked_by_captcha", "content_type_mismatch"}
+        for r in attachment_reports
+    )
+    if has_captcha_block:
+        extraction_completeness = "incomplete"
+        attachment_access = "blocked_by_captcha"
+    elif downloaded_attachments and not observations:
+        extraction_completeness = "incomplete_or_no_jobs"
+        attachment_access = "success"
+    elif not downloaded_attachments and parsed_meta["attachments"]:
+        extraction_completeness = "incomplete"
+        attachment_access = "failed"
+    else:
+        extraction_completeness = "complete" if observations else "no_attachments"
+        attachment_access = "success" if downloaded_attachments else "none"
+
+    report = {
+        "announcement_title": parsed_meta["title"],
+        "source_url": announcement_url,
+        "source_id": source_id,
+        "source_name": source_name,
+        "verify_ssl": verify_ssl,
+        "attachment_access": attachment_access,
+        "extraction_completeness": extraction_completeness,
+        "attachments": attachment_reports,
+        "observations_count": len(observations),
+    }
+
+    return observations, report
 
 
 def prepare_evaluation_run(
@@ -91,6 +158,8 @@ def prepare_evaluation_run(
         observations = [SourceObservation.from_dict(obs) for obs in raw_observations]
     elif isinstance(observations_source, list) and observations_source and isinstance(observations_source[0], SourceObservation):
         observations = observations_source  # type: ignore
+    elif isinstance(observations_source, list) and not observations_source:
+        observations = []
     else:
         observations = [SourceObservation.from_dict(obs) for obs in observations_source]  # type: ignore
 
@@ -137,7 +206,6 @@ def finalize_evaluation_run(
         else:
             mismatch_count += 1
 
-        # Temporary opaque ID in #9/#10 without premature entity resolution
         opp_id = f"opp_{obs.observation_id}"
 
         opp = Opportunity(

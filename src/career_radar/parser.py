@@ -14,7 +14,9 @@ import openpyxl
 from pypdf import PdfReader
 
 
-ATTACHMENT_EXTENSIONS = {".xlsx", ".xls", ".docx", ".doc", ".pdf"}
+SUPPORTED_EXTENSIONS = {".xlsx", ".docx", ".pdf"}
+LEGACY_EXTENSIONS = {".xls", ".doc"}
+ALL_DISCOVERY_EXTENSIONS = SUPPORTED_EXTENSIONS | LEGACY_EXTENSIONS
 
 
 class HTMLAnnouncementParser:
@@ -48,7 +50,7 @@ class HTMLAnnouncementParser:
 
             # Check extension in href path, link text, or link title
             detected_ext = ""
-            for ext in ATTACHMENT_EXTENSIONS:
+            for ext in ALL_DISCOVERY_EXTENSIONS:
                 if (
                     href.lower().endswith(ext)
                     or href.lower().split("?")[0].endswith(ext)
@@ -58,18 +60,21 @@ class HTMLAnnouncementParser:
                     detected_ext = ext
                     break
 
-            # Also check if it's an attachment download endpoint
+            # Also check if it's an attachment download endpoint with extension in text/title
             if not detected_ext and any(k in href.lower() for k in ["download", "attach", "wbfileid"]):
-                for ext in ATTACHMENT_EXTENSIONS:
+                for ext in ALL_DISCOVERY_EXTENSIONS:
                     if ext in link_text.lower() or ext in link_title.lower():
                         detected_ext = ext
                         break
 
             if detected_ext:
+                is_supported = detected_ext in SUPPORTED_EXTENSIONS
                 attachments.append({
                     "name": link_text,
                     "url": full_url,
                     "extension": detected_ext,
+                    "supported": is_supported,
+                    "status": "supported" if is_supported else "unsupported_legacy_format",
                 })
 
         return {
@@ -82,57 +87,88 @@ class HTMLAnnouncementParser:
 class AttachmentParser:
     """
     Extracts tabular rows and text from XLSX, DOCX, and text-native PDF attachments.
+    Explicitly refuses unsupported legacy formats (.xls, .doc) with Evidence Gap markers.
     Maintains row indices, column headers, and cell content with zero business filtering.
     """
 
     def parse_file(self, file_path: Path) -> List[Dict[str, Any]]:
         ext = file_path.suffix.lower()
-        if ext in {".xlsx", ".xls"}:
+        if ext == ".xlsx":
             return self._parse_xlsx(file_path)
-        elif ext in {".docx", ".doc"}:
+        elif ext == ".docx":
             return self._parse_docx(file_path)
         elif ext == ".pdf":
             return self._parse_pdf(file_path)
-        return []
+        elif ext in LEGACY_EXTENSIONS:
+            return [
+                {
+                    "file_type": ext.lstrip("."),
+                    "file_name": file_path.name,
+                    "status": "unsupported_legacy_format",
+                    "error": (
+                        f"Legacy format '{ext}' is not supported by mechanical parser. "
+                        "Issue #10 officially supports .xlsx, .docx, and text-native .pdf."
+                    ),
+                    "rows": [],
+                }
+            ]
+        return [
+            {
+                "file_type": ext.lstrip(".") or "unknown",
+                "file_name": file_path.name,
+                "status": "unsupported_format",
+                "rows": [],
+            }
+        ]
 
     def _parse_xlsx(self, file_path: Path) -> List[Dict[str, Any]]:
         tables = []
-        wb = openpyxl.load_workbook(file_path, data_only=True)
-        for sheet in wb.worksheets:
-            rows_data = list(sheet.iter_rows(values_only=True))
-            if not rows_data:
-                continue
-
-            # Find first non-empty row as header
-            header_idx = 0
-            headers = []
-            for idx, r in enumerate(rows_data):
-                non_empty = [str(c).strip() for c in r if c is not None and str(c).strip()]
-                if len(non_empty) >= 2:
-                    header_idx = idx
-                    headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(r)]
-                    break
-
-            if not headers:
-                continue
-
-            parsed_rows = []
-            for row_idx, r in enumerate(rows_data[header_idx + 1:], start=header_idx + 2):
-                if not any(c is not None and str(c).strip() for c in r):
+        try:
+            wb = openpyxl.load_workbook(file_path, data_only=True)
+            for sheet in wb.worksheets:
+                rows_data = list(sheet.iter_rows(values_only=True))
+                if not rows_data:
                     continue
-                cell_dict = {}
-                for col_idx, cell_val in enumerate(r):
-                    if col_idx < len(headers):
-                        h_name = headers[col_idx]
-                        cell_dict[h_name] = str(cell_val).strip() if cell_val is not None else ""
-                parsed_rows.append({"row_index": row_idx, "cells": cell_dict})
 
+                # Find first non-empty row with at least 2 headers
+                header_idx = 0
+                headers = []
+                for idx, r in enumerate(rows_data):
+                    non_empty = [str(c).strip() for c in r if c is not None and str(c).strip()]
+                    if len(non_empty) >= 2:
+                        header_idx = idx
+                        headers = [str(c).strip() if c is not None else f"col_{i}" for i, c in enumerate(r)]
+                        break
+
+                if not headers:
+                    continue
+
+                parsed_rows = []
+                for row_idx, r in enumerate(rows_data[header_idx + 1:], start=header_idx + 2):
+                    if not any(c is not None and str(c).strip() for c in r):
+                        continue
+                    cell_dict = {}
+                    for col_idx, cell_val in enumerate(r):
+                        if col_idx < len(headers):
+                            h_name = headers[col_idx]
+                            cell_dict[h_name] = str(cell_val).strip() if cell_val is not None else ""
+                    parsed_rows.append({"row_index": row_idx, "cells": cell_dict})
+
+                tables.append({
+                    "file_type": "xlsx",
+                    "file_name": file_path.name,
+                    "sheet_name": sheet.title,
+                    "status": "success",
+                    "headers": headers,
+                    "rows": parsed_rows,
+                })
+        except Exception as e:
             tables.append({
                 "file_type": "xlsx",
                 "file_name": file_path.name,
-                "sheet_name": sheet.title,
-                "headers": headers,
-                "rows": parsed_rows,
+                "status": "error",
+                "error": str(e),
+                "rows": [],
             })
         return tables
 
@@ -157,6 +193,7 @@ class AttachmentParser:
                     "file_type": "docx",
                     "file_name": file_path.name,
                     "table_index": t_idx,
+                    "status": "success",
                     "headers": headers,
                     "rows": parsed_rows,
                 })
@@ -164,6 +201,7 @@ class AttachmentParser:
             tables.append({
                 "file_type": "docx",
                 "file_name": file_path.name,
+                "status": "error",
                 "error": str(e),
                 "rows": [],
             })
@@ -180,6 +218,7 @@ class AttachmentParser:
             tables.append({
                 "file_type": "pdf",
                 "file_name": file_path.name,
+                "status": "success",
                 "pages": pages_text,
                 "rows": [],
             })
@@ -187,6 +226,7 @@ class AttachmentParser:
             tables.append({
                 "file_type": "pdf",
                 "file_name": file_path.name,
+                "status": "error",
                 "error": str(e),
                 "rows": [],
             })

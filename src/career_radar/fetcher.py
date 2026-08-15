@@ -11,9 +11,15 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 import requests
-import urllib3
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+class AttachmentAccessError(Exception):
+    """Raised when an attachment cannot be downloaded due to captcha, auth, or technical failure."""
+
+    def __init__(self, reason: str, message: str, url: str):
+        super().__init__(message)
+        self.reason = reason  # e.g. "blocked_by_captcha", "http_error", "content_type_mismatch"
+        self.url = url
 
 
 class AnnouncementFetcher:
@@ -27,7 +33,7 @@ class AnnouncementFetcher:
         cache_dir: Optional[Path] = None,
         timeout: int = 15,
         user_agent: Optional[str] = None,
-        verify_ssl: bool = False,
+        verify_ssl: bool = True,
     ):
         self.cache_dir = cache_dir or Path(".data/announcements")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -64,6 +70,7 @@ class AnnouncementFetcher:
                 "html_content": html_content,
                 "fetched_at": meta.get("fetched_at"),
                 "status_code": meta.get("status_code", 200),
+                "verify_ssl": meta.get("verify_ssl", self.verify_ssl),
                 "cached": True,
                 "entry_dir": str(entry_dir),
             }
@@ -93,6 +100,7 @@ class AnnouncementFetcher:
             "url": url,
             "fetched_at": datetime.now().isoformat(),
             "status_code": resp.status_code,
+            "verify_ssl": self.verify_ssl,
             "headers": dict(resp.headers),
         }
         with open(meta_file, "w", encoding="utf-8") as f:
@@ -103,6 +111,7 @@ class AnnouncementFetcher:
             "html_content": html_content,
             "fetched_at": meta["fetched_at"],
             "status_code": resp.status_code,
+            "verify_ssl": self.verify_ssl,
             "cached": False,
             "entry_dir": str(entry_dir),
         }
@@ -116,14 +125,15 @@ class AnnouncementFetcher:
     ) -> Path:
         """
         Downloads an attachment file into the announcement's cache entry directory.
+        Detects captcha challenges and HTML responses for binary attachment requests.
         """
         ext = (attachment_meta.get("extension") if attachment_meta else "") or ".xlsx"
         suggested_name = attachment_meta.get("name") if attachment_meta else ""
-        if suggested_name and any(suggested_name.endswith(e) for e in [".xlsx", ".xls", ".docx", ".doc", ".pdf"]):
+        if suggested_name and any(suggested_name.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
             filename = suggested_name
         else:
             base = os.path.basename(attachment_url.split("?")[0])
-            if any(base.endswith(e) for e in [".xlsx", ".xls", ".docx", ".doc", ".pdf"]):
+            if any(base.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
                 filename = base
             else:
                 filename = f"attachment_{hashlib.md5(attachment_url.encode()).hexdigest()[:8]}{ext}"
@@ -143,18 +153,61 @@ class AnnouncementFetcher:
         )
         resp.raise_for_status()
 
+        # Read content bytes
+        first_chunk = resp.raw.read(8192) if hasattr(resp, "raw") else b""
+        if not first_chunk:
+            chunks = []
+            for chunk in resp.iter_content(chunk_size=8192):
+                if chunk:
+                    chunks.append(chunk)
+            content_bytes = b"".join(chunks)
+        else:
+            remaining = resp.raw.read()
+            content_bytes = first_chunk + remaining
+
+        content_type = resp.headers.get("content-type", "").lower()
+
+        # Check for captcha or HTML redirection when expecting binary attachment
+        is_html_content = (
+            "text/html" in content_type
+            or content_bytes.lstrip().startswith(b"<!DOCTYPE html")
+            or content_bytes.lstrip().startswith(b"<html")
+        )
+
+        is_captcha_challenge = (
+            b"createimage.jsp" in content_bytes.lower()
+            or b"codeimg" in content_bytes.lower()
+            or b"codevalue" in content_bytes.lower()
+            or b"captcha" in content_bytes.lower()
+            or b"anti-bot" in content_bytes.lower()
+            or b"\xd1\xe9\xd6\xa4\xc2\xeb" in content_bytes  # "验证码" in GBK/GB2312
+            or b"\xe9\xaa\x8c\xe8\xaf\x81\xe7\xa0\x81" in content_bytes  # "验证码" in UTF-8
+        )
+
+        if is_html_content and is_captcha_challenge:
+            raise AttachmentAccessError(
+                reason="blocked_by_captcha",
+                message=f"Attachment download blocked by captcha challenge at {attachment_url}",
+                url=attachment_url,
+            )
+
+        if is_html_content and ext in {".xlsx", ".docx", ".pdf"}:
+            raise AttachmentAccessError(
+                reason="content_type_mismatch",
+                message=f"Expected binary attachment ({ext}) but received HTML page from {attachment_url}",
+                url=attachment_url,
+            )
+
         # Check content disposition if present
         cd = resp.headers.get("content-disposition", "")
         if "filename=" in cd:
             import urllib.parse
             fname_part = cd.split("filename=")[-1].strip("\"'; ")
             fname_part = urllib.parse.unquote(fname_part)
-            if fname_part and any(fname_part.endswith(e) for e in [".xlsx", ".xls", ".docx", ".doc", ".pdf"]):
+            if fname_part and any(fname_part.endswith(e) for e in [".xlsx", ".docx", ".pdf"]):
                 target_path = entry_dir / fname_part
 
         with open(target_path, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=8192):
-                if chunk:
-                    f.write(chunk)
+            f.write(content_bytes)
 
         return target_path

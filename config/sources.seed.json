@@ -78,10 +78,11 @@
     "evidence_ref": "docs/research/0002-higher-ed-job-sources.md#sample-5"
   },
   {
-    "source_id": "gdqy_rsc",
+    "source_id": "gdipu_rsc",
     "name": "广东轻工职业技术大学人事处",
-    "base_url": "https://rsc.gdqy.edu.cn/",
-    "domain": "rsc.gdqy.edu.cn",
+    "base_url": "https://rsc.gdipu.edu.cn/",
+    "domain": "rsc.gdipu.edu.cn",
+    "historical_domains": ["rsc.gdqy.edu.cn"],
     "source_type": "first_party_institution",
     "track": ["vocational_education", "higher_education_teaching"],
     "region": "guangdong",
