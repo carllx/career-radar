@@ -116,13 +116,7 @@ class RadarOrchestrator:
             active_monitoring_set = monitored_sources
         else:
             # Default bounded monitoring set: active seed/local sources matching candidate tracks/regions
-            candidate_tracks = set()
-            for t in profile.tracks:
-                if isinstance(t, dict):
-                    candidate_tracks.add(t.get("name") or t.get("track_id") or "")
-                elif isinstance(t, str):
-                    candidate_tracks.add(t)
-
+            candidate_tracks = profile.track_names()
             active_monitoring_set = [
                 s for s in source_registry.get_active_sources()
                 if not s.track or any(t in candidate_tracks for t in s.track)

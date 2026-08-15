@@ -325,30 +325,22 @@ def finalize_incremental_run(
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Phase 3 (Deterministic Helper):
-    Applies Agent EntityResolutionDecisions sequentially to mutate in-memory Opportunity working state,
-    validates evaluations, persists atomically once, and renders the incremental Daily Digest.
-    """
+    """Applies Agent decisions sequentially to in-memory state and persists atomically."""
     if len(observations) != len(resolution_decisions):
         raise ValueError(
-            f"Mismatched counts: {len(observations)} observations vs {len(resolution_decisions)} resolution decisions"
+            f"Mismatched counts: {len(observations)} observations vs {len(resolution_decisions)} decisions"
         )
-
     session = IncrementalResolutionSession(data_dir=data_dir)
-
     for obs, decision in zip(observations, resolution_decisions):
-        eval_res = evaluation_results.get(obs.observation_id)
-        if not eval_res and decision.target_opportunity_id:
-            eval_res = evaluation_results.get(decision.target_opportunity_id)
-
+        eval_res = evaluation_results.get(obs.observation_id) or (
+            evaluation_results.get(decision.target_opportunity_id) if decision.target_opportunity_id else None
+        )
         session.stage_decision(
             observation=obs,
             decision=decision,
             evaluation_result=eval_res,
             current_time=datetime.now().isoformat(),
         )
-
     return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
 
 
@@ -359,26 +351,18 @@ def finalize_evaluation_run(
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Standard finalize entrypoint.
-    If prior opportunities exist in store, failing fast is REQUIRED unless explicit Agent resolution is provided.
-    Defaulting to 'different' is permitted ONLY during initial empty-state bootstrap.
-    """
+    """Standard finalize entrypoint. Requires Agent resolution if prior opportunities exist."""
     store = OpportunityStore(Path(data_dir))
     prior_opps = store.load_all_opportunities()
     if len(prior_opps) > 0:
         raise ValueError(
-            f"Prior opportunities exist in store ({len(prior_opps)} records), but no Agent entity resolution was provided. "
-            "Helper is prohibited from assuming 'different' when prior state exists."
+            f"Prior opportunities exist in store ({len(prior_opps)} records), but no Agent entity resolution was provided."
         )
-
     default_decisions = [
         EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
         for _ in observations
     ]
-    eval_map = {
-        obs.observation_id: ev for obs, ev in zip(observations, evaluation_results)
-    }
+    eval_map = {obs.observation_id: ev for obs, ev in zip(observations, evaluation_results)}
     return finalize_incremental_run(
         observations=observations,
         resolution_decisions=default_decisions,
@@ -398,11 +382,7 @@ def run_radar_pipeline(
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """
-    Unified execution entrypoint across the Highest Testing Seam:
-    Sequential working state: each observation's candidate retrieval sees earlier opportunities created in the SAME run.
-    Atomicity: writes to disk only after entire batch succeeds.
-    """
+    """Unified pipeline across highest testing seam with sequential in-memory working state."""
     profile_path = Path(profile_path)
     if not profile_path.exists():
         raise FileNotFoundError(f"Profile configuration not found: {profile_path}")
@@ -429,11 +409,9 @@ def run_radar_pipeline(
 
     for i, obs in enumerate(observations):
         packet, candidates = session.prepare_observation_packet(obs)
-
         if entity_resolver_fn:
             decision = entity_resolver_fn(obs, candidates)
         elif len(session.working_opportunities) == 0:
-            # Bootstrap compatibility: first opportunity when working state is completely empty
             decision = EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
         else:
             raise ValueError(

@@ -5,7 +5,7 @@ Respects CONTEXT.md and ADR-0001 ~ ADR-0004.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 
 CANONICAL_DIMENSIONS = [
@@ -32,6 +32,16 @@ class CandidateProfile:
     tracks: List[Dict[str, Any]] = field(default_factory=list)
     regions: Dict[str, List[str]] = field(default_factory=dict)
     hard_constraints: Dict[str, Any] = field(default_factory=dict)
+
+    def track_names(self) -> Set[str]:
+        """Returns normalized set of target track names."""
+        names = set()
+        for t in self.tracks:
+            if isinstance(t, dict):
+                names.add(t.get("name") or t.get("track_id") or "")
+            elif isinstance(t, str):
+                names.add(t)
+        return {n for n in names if n}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CandidateProfile":
