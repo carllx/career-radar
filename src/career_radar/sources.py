@@ -167,24 +167,21 @@ class SourceRegistry:
 
     def record_monitoring_fact(
         self,
-        fact: Union[MonitoringFact, str],
-        technical_status: Optional[str] = None,
-        monitored_at: Optional[str] = None,
-        checked_url: Optional[str] = None,
+        fact: MonitoringFact,
     ) -> SourceRecord:
         """
-        Mechanically records technical execution fact from actual monitoring check.
+        Mechanically records technical execution fact from actual completed monitoring check.
+        Requires a canonical MonitoringFact. No string shortcuts or default success allowed.
         """
-        if isinstance(fact, MonitoringFact):
-            source_id = fact.source_id
-            tech_status = fact.technical_status
-            now = fact.checked_at or datetime.now().isoformat()
-            url = fact.checked_url
-        else:
-            source_id = fact
-            tech_status = technical_status or "success"
-            now = monitored_at or datetime.now().isoformat()
-            url = checked_url
+        if not isinstance(fact, MonitoringFact):
+            raise TypeError(
+                f"record_monitoring_fact requires a MonitoringFact instance, got {type(fact).__name__}"
+            )
+
+        source_id = fact.source_id
+        tech_status = fact.technical_status
+        now = fact.checked_at or datetime.now().isoformat()
+        url = fact.checked_url
 
         src = self.get_source(source_id)
         if not src:

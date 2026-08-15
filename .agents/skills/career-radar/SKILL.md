@@ -45,7 +45,7 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 
 ---
 
-## 2. Agent 端到端编排工作流 (13-Step Workflow)
+## 2. Agent 端到端编排工作流 (12-Step Workflow)
 
 ### 步骤 1：加载候选人画像与运行状态
 - 读取 `profile.local.yaml`（若缺失则回退 `config/profile.example.yaml`）；
@@ -91,10 +91,10 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 - 逐项给出 5 种标准状态之一，并在 `requirement_evidence` 中**必须引用公告/附件原文证据**（严禁编造伪原文）；
 - 聚合输出最终推荐结论。
 
-### 步骤 10：Single-Shot 原子持久化 (Atomic Persistence)
-- 调用 Helper 一次性原子写入 `.data/opportunities.jsonl`；
-- 写入渠道状态变动至 `.data/sources.json`；
-- 若中途出现任一致命校验失败，严格 Fail Fast，磁盘保持不变。
+### 步骤 10：Single-Shot 独立文件原子写入 (Persistence)
+- 调用 Helper 写入 `.data/opportunities.jsonl`（采用写入临时文件后重命名替换，保证单文件原子性与不损坏）；
+- 调用 Helper 写入本地渠道状态至 `.data/sources.json`（同样采用临时文件重命名原子替换）；
+- 校验失败则在写入前 Fail Fast。各状态文件独立维护，不依赖跨文件分布式事务。
 
 ### 步骤 11：数据驱动渲染每日简报 (Daily Digest)
 - 生成 `reports/YYYY-MM-DD.md`，完整呈现四大板块：

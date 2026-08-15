@@ -1,14 +1,14 @@
 """
-Unified Autonomous Radar Orchestrator for Career Radar MVP-1.
-Coordinates the end-to-end autonomous run:
+Deterministic Radar Pipeline Coordinator for Career Radar MVP-1.
+Respects ADR-0002: The Agent is the sole Workflow Orchestrator and semantic authority.
+This class acts as the deterministic helper coordinator for executing mechanical steps:
 1. Load Candidate Profile, Public Source Seeds, Local Source State, Prior Opportunity State.
-2. Known-source Monitoring (Agent-driven bounded monitoring set).
-3. Source Discovery (Agent explores new candidate sources, verifies authenticity, records to .data/sources.json).
-4. Fetch & Extract -> SourceObservations (via live first-party fetcher or test doubles).
-5. Sequential In-Memory Entity Resolution & Qualification Matching (via IncrementalResolutionSession).
-6. Single-shot atomic persistence to .data/opportunities.jsonl and .data/sources.json.
-7. Render 4-section Daily Digest (reports/YYYY-MM-DD.md).
-8. Return RadarRunOutcome.
+2. Apply Agent Source Lifecycle Decisions (Discovery / Degradation / Reactivation).
+3. Record Mechanical Monitoring Facts (actual technical checks).
+4. Process Observations via Incremental Working State (Candidate Retrieval, Agent Entity Resolution & Qualification Matching).
+5. Single-shot persistence to .data/opportunities.jsonl and .data/sources.json.
+6. Render 4-section Daily Digest (reports/YYYY-MM-DD.md).
+7. Return RadarRunOutcome.
 """
 
 from dataclasses import asdict, dataclass
@@ -55,8 +55,8 @@ class RadarRunOutcome:
 
 class RadarOrchestrator:
     """
-    Orchestrates the unified Autonomous Radar workflow across Known-source Monitoring
-    and Source Discovery without hardcoded vendor locks.
+    Deterministic helper coordinator for the Career Radar pipeline.
+    Executes mechanical stages while delegating all semantic and lifecycle decisions to the Agent.
     """
 
     def __init__(
