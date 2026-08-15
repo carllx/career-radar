@@ -1,7 +1,7 @@
 """
 Public transport-neutral runner entrypoint for Career Radar MVP-1.
 Supports the IDE-Agent-facing two-phase workflow:
-1. PREPARE: load inputs and assemble Evidence Packets for Agent inspection.
+1. PREPARE: load inputs / fetch first-party announcements, assemble Evidence Packets for Agent inspection.
 2. DECIDE: Agent (IDE Agent) performs semantic evaluation across canonical dimensions.
 3. FINALIZE: mechanically validate schema, aggregate, persist atomically, render Daily Digest.
 """
@@ -13,19 +13,61 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import yaml
 
 from .evaluator import EvaluationValidator, build_evaluation_packet
+from .extractor import AnnouncementExtractor
+from .fetcher import AnnouncementFetcher
 from .models import (
     CandidateProfile,
     EvaluationResult,
     Opportunity,
     SourceObservation,
 )
+from .parser import HTMLAnnouncementParser
 from .reporter import DigestReporter
 from .store import OpportunityStore
 
 
+def fetch_and_extract_first_party_announcement(
+    announcement_url: str,
+    source_id: str,
+    source_name: str,
+    cache_dir: Optional[Path] = None,
+) -> List[SourceObservation]:
+    """
+    Fetches a live first-party announcement page, downloads its discovered attachments,
+    and slices them into discrete SourceObservations.
+    """
+    cache_dir = cache_dir or Path(".data/announcements")
+    fetcher = AnnouncementFetcher(cache_dir=cache_dir)
+    fetched = fetcher.fetch_announcement_html(announcement_url)
+
+    html_parser = HTMLAnnouncementParser()
+    parsed_meta = html_parser.parse(fetched["html_content"], base_url=announcement_url)
+
+    entry_dir = Path(fetched["entry_dir"])
+    downloaded_attachments = []
+    for att in parsed_meta["attachments"]:
+        try:
+            local_att = fetcher.download_attachment(
+                att["url"], entry_dir=entry_dir, attachment_meta=att
+            )
+            downloaded_attachments.append(local_att)
+        except Exception:
+            pass
+
+    extractor = AnnouncementExtractor(cache_dir=cache_dir)
+    return extractor.extract_from_html_and_attachments(
+        html_content=fetched["html_content"],
+        source_url=announcement_url,
+        source_id=source_id,
+        source_name=source_name,
+        local_attachment_paths=downloaded_attachments,
+        observed_at=fetched.get("fetched_at"),
+    )
+
+
 def prepare_evaluation_run(
     profile_path: Union[str, Path],
-    observations_source: Union[str, Path, List[Dict[str, Any]]],
+    observations_source: Union[str, Path, List[Dict[str, Any]], List[SourceObservation]],
 ) -> Tuple[CandidateProfile, List[SourceObservation], List[Dict[str, Any]]]:
     """
     Phase 1 (Deterministic Helper):
@@ -46,12 +88,13 @@ def prepare_evaluation_run(
             raise FileNotFoundError(f"Observations file not found: {obs_file}")
         with open(obs_file, "r", encoding="utf-8") as f:
             raw_observations = json.load(f)
+        observations = [SourceObservation.from_dict(obs) for obs in raw_observations]
+    elif isinstance(observations_source, list) and observations_source and isinstance(observations_source[0], SourceObservation):
+        observations = observations_source  # type: ignore
     else:
-        raw_observations = observations_source
+        observations = [SourceObservation.from_dict(obs) for obs in observations_source]  # type: ignore
 
-    observations = [SourceObservation.from_dict(obs) for obs in raw_observations]
     packets = [build_evaluation_packet(profile, obs) for obs in observations]
-
     return profile, observations, packets
 
 
@@ -94,7 +137,7 @@ def finalize_evaluation_run(
         else:
             mismatch_count += 1
 
-        # Temporary opaque ID in #9 without premature entity resolution
+        # Temporary opaque ID in #9/#10 without premature entity resolution
         opp_id = f"opp_{obs.observation_id}"
 
         opp = Opportunity(
@@ -134,7 +177,7 @@ def finalize_evaluation_run(
 
 def run_radar_pipeline(
     profile_path: Union[str, Path],
-    observations_source: Union[str, Path, List[Dict[str, Any]]],
+    observations_source: Union[str, Path, List[Dict[str, Any]], List[SourceObservation]],
     evaluator_fn: Callable[[CandidateProfile, SourceObservation], EvaluationResult],
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",

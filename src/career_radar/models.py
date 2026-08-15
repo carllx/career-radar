@@ -93,6 +93,7 @@ class SourceObservation:
     official_url: str
     observed_at: str
     extracted_requirements: Dict[str, str]
+    provenance: Optional[Dict[str, Any]] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SourceObservation":
@@ -109,7 +110,27 @@ class SourceObservation:
             official_url=data.get("official_url", ""),
             observed_at=data.get("observed_at", datetime.now().isoformat()),
             extracted_requirements=data.get("extracted_requirements", {}),
+            provenance=data.get("provenance"),
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        res = {
+            "observation_id": self.observation_id,
+            "announcement_id": self.announcement_id,
+            "source_id": self.source_id,
+            "source_name": self.source_name,
+            "announcement_title": self.announcement_title,
+            "job_title": self.job_title,
+            "organization": self.organization,
+            "location": self.location,
+            "track": self.track,
+            "official_url": self.official_url,
+            "observed_at": self.observed_at,
+            "extracted_requirements": self.extracted_requirements,
+        }
+        if self.provenance:
+            res["provenance"] = self.provenance
+        return res
 
 
 @dataclass
