@@ -60,3 +60,24 @@ Agent 综合各维度证据状态输出的最终三态决策，包含三个 cano
 - `明显不符合`
 
 具体聚合规则参见 [`docs/adr/0001-agent-driven-discrete-matching-protocol.md`](docs/adr/0001-agent-driven-discrete-matching-protocol.md)。
+
+---
+
+## 数据模型与实体消歧 (Data Model & Entity Resolution)
+
+### Source（渠道源）
+招聘信息的采集入口（如高校人事处官网、人社局考录系统、垂直人才网等），分为 `known_fixed`（静态已知源）与 `discovered`（动态探索发现源）。
+
+### Announcement（招聘公告）
+某一渠道在特定时间发布的一篇具体招聘文章、通知或推文，包含标题、原文文本、附件提取内容及抓取时间戳。
+
+### Source Observation（来源观测）
+从特定 `Announcement` 中切片提取出的关于某个具体岗位的原始观察记录与条款证据，是 `Announcement` 与 `Opportunity` 之间的多对一连接节点。
+
+### Entity Resolution（实体消歧与去重）
+由 Agent 基于语义、组织、岗位要求与全量上下文证据所执行的实体同一性判别过程。确定性辅助工具仅负责检索候选集，最终判定由 Agent 输出四种 canonical outcomes：
+- `same`：跨渠道重复发布，归并至同一 Opportunity；
+- `update`：既有 Opportunity 的补充、延期或资格修订，记录变更并触发增量评估；
+- `different`：确认为不同编制或不同业务方向的独立职位，创建新 Opportunity；
+- `uncertain`：证据不足以断定，保留独立实体，避免激进误合并。
+
