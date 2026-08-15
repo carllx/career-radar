@@ -1,10 +1,12 @@
 """
-Local state persistence for Career Radar opportunities.
+Atomic local state persistence for Career Radar opportunities.
 Implements ADR-0003 & ADR-0004 (.data/opportunities.jsonl).
 """
 
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import List
 
 from .models import Opportunity
@@ -12,7 +14,8 @@ from .models import Opportunity
 
 class OpportunityStore:
     """
-    Manages atomic reading and appending of Opportunities in local JSONL format.
+    Manages atomic reading and writing of Opportunities in local JSONL format.
+    Uses safe temporary file writing and atomic file replacement.
     """
 
     def __init__(self, data_dir: Path):
@@ -22,9 +25,9 @@ class OpportunityStore:
 
     def save_opportunities(self, opportunities: List[Opportunity]) -> None:
         """
-        Saves opportunities by appending or updating them in opportunities.jsonl.
+        Saves opportunities atomically using a temporary file and replace.
         """
-        # Read existing
+        # Read existing records
         existing_map = {}
         if self.opps_file.exists():
             with open(self.opps_file, "r", encoding="utf-8") as f:
@@ -37,10 +40,23 @@ class OpportunityStore:
         for opp in opportunities:
             existing_map[opp.opportunity_id] = opp.to_dict()
 
-        # Write back atomically
-        with open(self.opps_file, "w", encoding="utf-8") as f:
-            for item in existing_map.values():
-                f.write(json.dumps(item, ensure_ascii=False) + "\n")
+        # Write to temporary file in the same directory (ensuring atomic rename across same filesystem)
+        temp_file_fd, temp_file_path = tempfile.mkstemp(
+            dir=str(self.data_dir), prefix="opps_", suffix=".tmp"
+        )
+        try:
+            with open(temp_file_fd, "w", encoding="utf-8") as f:
+                for item in existing_map.values():
+                    f.write(json.dumps(item, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+            # Atomic replace
+            os.replace(temp_file_path, self.opps_file)
+        except Exception:
+            if os.path.exists(temp_file_path):
+                os.remove(temp_file_path)
+            raise
 
     def load_all(self) -> List[dict]:
         """

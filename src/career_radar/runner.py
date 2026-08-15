@@ -1,16 +1,22 @@
 """
 Public transport-neutral runner entrypoint for Career Radar MVP-1.
-Can be invoked by IDE Agent / Skill / script.
+Can be invoked by IDE Agent / Skill / script / test harness.
 """
 
 from datetime import datetime
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 import yaml
 
-from .evaluator import DiscreteEvaluator
-from .models import CandidateProfile, Opportunity, SourceObservation
+from .evaluator import EvaluationValidator
+from .models import (
+    CandidateProfile,
+    DimensionEvaluation,
+    EvaluationResult,
+    Opportunity,
+    SourceObservation,
+)
 from .reporter import DigestReporter
 from .store import OpportunityStore
 
@@ -18,18 +24,20 @@ from .store import OpportunityStore
 def run_radar_pipeline(
     profile_path: Union[str, Path],
     observations_source: Union[str, Path, List[Dict[str, Any]]],
+    evaluator_fn: Callable[[CandidateProfile, SourceObservation], EvaluationResult],
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Executes a complete Career Radar Run:
+    Executes a complete Career Radar Run at the highest seam:
     1. Loads private profile
     2. Loads SourceObservations
-    3. Executes Agent discrete semantic evaluation across 6 canonical dimensions
-    4. Forms Opportunity entities
-    5. Persists state to .data/opportunities.jsonl
-    6. Generates Markdown Daily Digest (reports/YYYY-MM-DD.md)
+    3. Invokes the Agent semantic evaluator for 6-dimension discrete evaluation
+    4. Validates structured evaluation result and computes canonical recommendation
+    5. Forms Opportunity entities (using temporary/opaque ID in #9)
+    6. Persists state atomically to .data/opportunities.jsonl
+    7. Generates Markdown Daily Digest (reports/YYYY-MM-DD.md)
     """
     profile_path = Path(profile_path)
     data_dir = Path(data_dir)
@@ -58,8 +66,7 @@ def run_radar_pipeline(
 
     observations = [SourceObservation.from_dict(obs) for obs in raw_observations]
 
-    # 3. Evaluate each observation
-    evaluator = DiscreteEvaluator()
+    # 3. Evaluate each observation via the Agent semantic seam
     opportunities: List[Opportunity] = []
 
     recommended_count = 0
@@ -67,9 +74,10 @@ def run_radar_pipeline(
     mismatch_count = 0
 
     for obs in observations:
-        eval_result = evaluator.evaluate(profile, obs)
+        raw_result = evaluator_fn(profile, obs)
+        validated_result = EvaluationValidator.validate_and_aggregate(raw_result)
 
-        rec = eval_result.final_recommendation
+        rec = validated_result.final_recommendation
         if rec == "建议关注":
             recommended_count += 1
         elif rec == "需要人工确认":
@@ -77,8 +85,11 @@ def run_radar_pipeline(
         else:
             mismatch_count += 1
 
+        # In #9: Opaque/temporary Opportunity ID without claiming cross-channel deduplication
+        opp_id = f"opp_{obs.observation_id}"
+
         opp = Opportunity(
-            opportunity_id=f"opp_{obs.organization}_{obs.job_title}".replace(" ", "_"),
+            opportunity_id=opp_id,
             canonical_job_title=obs.job_title,
             organization=obs.organization,
             location=obs.location,
@@ -86,13 +97,13 @@ def run_radar_pipeline(
             official_url=obs.official_url,
             lifecycle_status="active",
             observations=[obs],
-            latest_evaluation=eval_result,
+            latest_evaluation=validated_result,
             created_at=obs.observed_at,
             updated_at=obs.observed_at,
         )
         opportunities.append(opp)
 
-    # 4. Save state to local store
+    # 4. Atomically persist state to local store
     store = OpportunityStore(data_dir)
     store.save_opportunities(opportunities)
 
@@ -110,30 +121,3 @@ def run_radar_pipeline(
         "report_path": str(report_file),
         "opportunities": [opp.to_dict() for opp in opportunities],
     }
-
-
-def main():
-    """CLI entrypoint for standalone run."""
-    import sys
-
-    profile_file = Path("profile.local.yaml")
-    if not profile_file.exists():
-        profile_file = Path("config/profile.example.yaml")
-
-    fixture_file = Path("config/fixtures/mock_observations.example.json")
-    if not fixture_file.exists():
-        print(f"Fixture file not found: {fixture_file}")
-        sys.exit(1)
-
-    result = run_radar_pipeline(
-        profile_path=profile_file,
-        observations_source=fixture_file,
-        data_dir=".data",
-        reports_dir="reports",
-    )
-    print(f"[Career Radar Run Completed] Total: {result['total_evaluated']} | Recommended: {result['recommended_count']} | Review: {result['review_count']}")
-    print(f"Daily Digest Report generated at: {result['report_path']}")
-
-
-if __name__ == "__main__":
-    main()
