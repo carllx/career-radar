@@ -75,9 +75,22 @@ Agent 综合各维度证据状态输出的最终三态决策，包含三个 cano
 从特定 `Announcement` 中切片提取出的关于某个具体岗位的原始观察记录与条款证据，是 `Announcement` 与 `Opportunity` 之间的多对一连接节点。
 
 ### Entity Resolution（实体消歧与去重）
-由 Agent 基于语义、组织、岗位要求与全量上下文证据所执行的实体同一性判别过程。确定性辅助工具仅负责检索候选集，最终判定由 Agent 输出四种 canonical outcomes：
+由 Agent 基于语义、组织、岗位要求与全量上下文证据所执行的实体同一性判别过程。确定性辅助工具仅负责以高召回（High Recall）为目标检索可能相关的历史候选集（严禁将关键词或标题相似度作为硬排除门槛），最终判定由 Agent 输出四种 canonical outcomes：
 - `same`：跨渠道重复发布，归并至同一 Opportunity；
 - `update`：既有 Opportunity 的补充、延期或资格修订，记录变更并触发增量评估；
 - `different`：确认为不同编制或不同业务方向的独立职位，创建新 Opportunity；
 - `uncertain`：证据不足以断定，保留独立实体，避免激进误合并。
+
+---
+
+## 运行与交付 (Runtime & Delivery)
+
+### Candidate Profile（候选人画像）
+用户的私密背景信息（含学历、专业、地域赛道偏好与论文成果），本地存放在被 `.gitignore` 保护的 `profile.local.yaml`，仓库仅保留脱敏模板 `profile.example.yaml`。
+
+### Daily Digest Report（每日机会简报）
+Agent 运行完成后生成的结构化 Markdown 报告（保存在 `reports/YYYY-MM-DD.md`），高信噪比呈现高价值新增机会、重要岗位动态变更、存疑待确认项及渠道网络变动。
+
+### Local Data Cache（本地数据持久化）
+本地被忽略的 `.data/` 目录，存放 Opportunity 历史库（`opportunities.jsonl`）、渠道元数据（`sources.json`）及原始公告抓取缓存。
 
