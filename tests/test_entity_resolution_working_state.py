@@ -255,3 +255,74 @@ def test_same_run_failure_atomicity_preserves_disk_store(
     store = OpportunityStore(data_dir)
     saved_opps = store.load_all_opportunities()
     assert len(saved_opps) == 0
+
+
+# --- 3. Empty store multi-observation without resolver fails fast on 2nd observation ---
+
+
+def test_empty_store_multi_observation_without_resolver_fails_fast_on_second_obs(
+    tmp_path: Path, mock_profile_file: Path
+):
+    """
+    CRITICAL SPEC GUARD TEST:
+    Initial store is EMPTY.
+    Batch has 2 observations: [obs_a, obs_b].
+    entity_resolver_fn is None.
+
+    Expected:
+    - Observation A stages in working state as bootstrap initial opportunity.
+    - Observation B arrives -> working state already has 1 opportunity -> fail fast!
+      Helper is prohibited from defaulting observation B to 'different'.
+    - Disk store remains completely EMPTY because commit never happened (failure atomicity).
+    """
+    data_dir, reports_dir = tmp_path / ".data", tmp_path / "reports"
+    now = datetime.now().isoformat()
+
+    obs_a = SourceObservation(
+        observation_id="obs_boot_a",
+        announcement_id="ann_boot_a",
+        source_id="src_boot",
+        source_name="人事处",
+        announcement_title="招聘公告A",
+        job_title="计算机专任教师",
+        organization="某大学",
+        location="广州",
+        track="higher_education_teaching",
+        official_url="https://example.edu.cn/boot_a.html",
+        observed_at=now,
+        extracted_requirements={},
+    )
+
+    obs_b = SourceObservation(
+        observation_id="obs_boot_b",
+        announcement_id="ann_boot_b",
+        source_id="src_boot",
+        source_name="人事处",
+        announcement_title="招聘公告B",
+        job_title="软件工程专任教师",
+        organization="某大学",
+        location="广州",
+        track="higher_education_teaching",
+        official_url="https://example.edu.cn/boot_b.html",
+        observed_at=now,
+        extracted_requirements={},
+    )
+
+    with pytest.raises(ValueError) as excinfo:
+        run_radar_pipeline(
+            profile_path=mock_profile_file,
+            observations_source=[obs_a, obs_b],
+            evaluator_fn=lambda prof, obs: _create_eval_result(),
+            entity_resolver_fn=None,  # No entity resolver provided!
+            data_dir=data_dir,
+            reports_dir=reports_dir,
+        )
+
+    assert "working state contains opportunities" in str(excinfo.value)
+    assert "no entity_resolver_fn was provided" in str(excinfo.value)
+
+    # Disk store MUST remain completely EMPTY
+    store = OpportunityStore(data_dir)
+    saved_opps = store.load_all_opportunities()
+    assert len(saved_opps) == 0
+

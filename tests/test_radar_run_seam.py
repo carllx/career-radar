@@ -6,6 +6,7 @@ import yaml
 from career_radar.models import (
     CandidateProfile,
     DimensionEvaluation,
+    EntityResolutionDecision,
     EvaluationResult,
     SourceObservation,
 )
@@ -224,10 +225,18 @@ def test_career_radar_highest_seam_full_run(mock_radar_env):
     """
     evaluator = FakeAgentEvaluator()
 
+    def fake_entity_resolver(obs, candidates):
+        return EntityResolutionDecision(
+            resolution="different",
+            target_opportunity_id=None,
+            rationale="Test fixture distinct post",
+        )
+
     result = run_radar_pipeline(
         profile_path=mock_radar_env["profile_path"],
         observations_source=mock_radar_env["observations_fixture_path"],
         evaluator_fn=evaluator,
+        entity_resolver_fn=fake_entity_resolver,
         data_dir=mock_radar_env["data_dir"],
         reports_dir=mock_radar_env["reports_dir"],
         run_date="2026-08-15",

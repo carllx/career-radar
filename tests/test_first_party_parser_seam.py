@@ -12,11 +12,12 @@ from career_radar.fetcher import AnnouncementFetcher, AttachmentAccessError
 from career_radar.models import (
     CandidateProfile,
     DimensionEvaluation,
+    EntityResolutionDecision,
     EvaluationResult,
     SourceObservation,
 )
 from career_radar.parser import AttachmentParser, HTMLAnnouncementParser
-from career_radar.runner import finalize_evaluation_run
+from career_radar.runner import finalize_incremental_run
 
 
 @pytest.fixture
@@ -304,9 +305,18 @@ def test_first_party_announcement_to_daily_digest_seam(
         ),
     ]
 
-    summary = finalize_evaluation_run(
+    decisions_map = {
+        obs.observation_id: ev for obs, ev in zip(observations, decisions)
+    }
+    resolution_decisions = [
+        EntityResolutionDecision(resolution="different", rationale="First-party test double post")
+        for _ in observations
+    ]
+
+    summary = finalize_incremental_run(
         observations=observations,
-        evaluation_results=decisions,
+        resolution_decisions=resolution_decisions,
+        evaluation_results=decisions_map,
         data_dir=tmp_path / ".data",
         reports_dir=tmp_path / "reports",
         run_date="2026-08-15",

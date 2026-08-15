@@ -430,13 +430,13 @@ def run_radar_pipeline(
 
         if entity_resolver_fn:
             decision = entity_resolver_fn(obs, candidates)
-        elif len(session.prior_opportunities) == 0:
-            # Bootstrap initial run compatibility (#9)
+        elif len(session.working_opportunities) == 0:
+            # Bootstrap compatibility: first opportunity when working state is completely empty
             decision = EntityResolutionDecision(resolution="different", rationale="Bootstrap initial opportunity")
         else:
             raise ValueError(
-                f"Prior opportunities exist in store ({len(session.prior_opportunities)} records), "
-                "but no entity_resolver_fn was provided. Helper is strictly prohibited from assuming 'different' when prior state exists."
+                f"Prior opportunities exist in store or working state contains opportunities ({len(session.working_opportunities)} records), "
+                "but no entity_resolver_fn was provided. Helper is strictly prohibited from assuming 'different'."
             )
 
         eval_res = None
