@@ -212,6 +212,7 @@ class IncrementalResolutionSession:
         self,
         reports_dir: Union[str, Path] = "reports",
         run_date: Optional[str] = None,
+        network_changes: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         Atomically persists the working state to disk and renders the Daily Digest.
@@ -229,6 +230,7 @@ class IncrementalResolutionSession:
             run_date=run_date,
             new_opportunity_ids=self.new_opportunity_ids,
             updated_opportunity_ids=self.updated_opportunity_ids,
+            network_changes=network_changes,
         )
 
         recommended_count = sum(

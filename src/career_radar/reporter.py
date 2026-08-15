@@ -6,7 +6,7 @@ Respects Issue #11 incremental entity resolution presentation.
 
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from .models import Opportunity
 
@@ -27,38 +27,51 @@ class DigestReporter:
     def generate_report(
         self,
         opportunities: List[Opportunity],
-        run_date: str,
+        run_date: Optional[str] = None,
         new_opportunity_ids: Optional[List[str]] = None,
         updated_opportunity_ids: Optional[List[str]] = None,
+        network_changes: Optional[List[Dict[str, Any]]] = None,
     ) -> Path:
-        report_path = self.reports_dir / f"{run_date}.md"
+        """
+        Renders the daily markdown digest report to reports/YYYY-MM-DD.md.
+        """
+        if not run_date:
+            run_date = datetime.now().strftime("%Y-%m-%d")
 
-        # Determine target scope for report
-        if new_opportunity_ids is not None or updated_opportunity_ids is not None:
-            active_new_ids = set(new_opportunity_ids or [])
-            active_update_ids = set(updated_opportunity_ids or [])
+        report_path = self.reports_dir / f"{run_date}.md"
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+
+        if new_opportunity_ids is not None:
             target_opps = [
-                o for o in opportunities
-                if o.opportunity_id in active_new_ids or o.opportunity_id in active_update_ids
+                o for o in opportunities if o.opportunity_id in new_opportunity_ids
             ]
         else:
             target_opps = opportunities
+
+        if updated_opportunity_ids is not None:
+            updated_posts = [
+                o for o in opportunities if o.opportunity_id in updated_opportunity_ids
+            ]
+        else:
+            updated_posts = [
+                o for o in opportunities if o.lifecycle_status == "updated"
+            ]
 
         recommended = [
             o
             for o in target_opps
             if o.latest_evaluation
             and o.latest_evaluation.final_recommendation == "建议关注"
-            and o.lifecycle_status != "updated"
+            and not o.uncertain_links
         ]
         review_needed = [
             o
             for o in target_opps
-            if (o.latest_evaluation and o.latest_evaluation.final_recommendation == "需要人工确认")
+            if (
+                o.latest_evaluation
+                and o.latest_evaluation.final_recommendation == "需要人工确认"
+            )
             or o.uncertain_links
-        ]
-        updated_posts = [
-            o for o in target_opps if o.lifecycle_status == "updated"
         ]
 
         lines = [
@@ -115,9 +128,27 @@ class DigestReporter:
             "",
             "## 🌐 渠道网络变动",
             "",
-            "- 监控已知源正常运行，暂无新增失效或需降级渠道。",
-            "",
         ])
+
+        if not network_changes:
+            lines.append("- 本轮巡检已知源正常运行，暂无新增渠道或状态降级变动。\n")
+        else:
+            for chg in network_changes:
+                chg_type = chg.get("type")
+                name = chg.get("name", "未知渠道")
+                url = chg.get("base_url", "")
+                link_text = f"[{name}]({url})" if url else f"**{name}**"
+                if chg_type == "discovered":
+                    rationale = chg.get("rationale") or "新发现可用招聘渠道"
+                    lines.append(f"- 🆕 **新发现渠道**：{link_text} — {rationale}")
+                elif chg_type == "degraded":
+                    reason = chg.get("reason") or "渠道失效或不可访问"
+                    lines.append(f"- ⚠️ **渠道降级**：{link_text} — {reason}")
+                elif chg_type == "reactivated":
+                    lines.append(f"- 🔄 **渠道恢复**：{link_text} — 重新恢复活跃监测")
+                else:
+                    lines.append(f"- ℹ️ **渠道变动**：{link_text}")
+            lines.append("")
 
         report_path.write_text("\n".join(lines), encoding="utf-8")
         return report_path

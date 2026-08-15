@@ -1,0 +1,201 @@
+"""
+Unified Autonomous Radar Orchestrator for Career Radar MVP-1.
+Coordinates the end-to-end autonomous run:
+1. Load Candidate Profile, Public Source Seeds, Local Source State, Prior Opportunity State.
+2. Known-source Monitoring (Agent-driven bounded monitoring set).
+3. Source Discovery (Agent explores new candidate sources, verifies authenticity, records to .data/sources.json).
+4. Fetch & Extract -> SourceObservations (via live first-party fetcher or test doubles).
+5. Sequential In-Memory Entity Resolution & Qualification Matching (via IncrementalResolutionSession).
+6. Single-shot atomic persistence to .data/opportunities.jsonl and .data/sources.json.
+7. Render 4-section Daily Digest (reports/YYYY-MM-DD.md).
+8. Return RadarRunOutcome.
+"""
+
+from dataclasses import asdict, dataclass
+from datetime import datetime
+import json
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import yaml
+
+from .evaluator import EvaluationValidator
+from .models import (
+    CandidateProfile,
+    EntityResolutionDecision,
+    EvaluationResult,
+    Opportunity,
+    SourceObservation,
+)
+from .runner import IncrementalResolutionSession
+from .sources import SourceLifecycleDecision, SourceRecord, SourceRegistry
+
+
+@dataclass
+class RadarRunOutcome:
+    """
+    Standardized, coarse-grained outcome summary for the Agent Run.
+    Suitable for scheduler status checks and human/IDE quick glances.
+    """
+    status: str  # "success", "partial", "failure", "attention"
+    run_date: str
+    monitored_sources_count: int
+    discovered_sources_count: int
+    new_opportunities_count: int
+    updated_opportunities_count: int
+    deduped_same_count: int
+    recommended_count: int
+    review_count: int
+    network_changes_count: int
+    report_path: str
+    summary_message: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+class RadarOrchestrator:
+    """
+    Orchestrates the unified Autonomous Radar workflow across Known-source Monitoring
+    and Source Discovery without hardcoded vendor locks.
+    """
+
+    def __init__(
+        self,
+        profile_path: Union[str, Path] = "profile.local.yaml",
+        seed_sources_path: Union[str, Path] = "config/sources.seed.json",
+        data_dir: Union[str, Path] = ".data",
+        reports_dir: Union[str, Path] = "reports",
+    ):
+        self.profile_path = Path(profile_path)
+        self.seed_sources_path = Path(seed_sources_path)
+        self.data_dir = Path(data_dir)
+        self.reports_dir = Path(reports_dir)
+
+    def load_profile(self) -> CandidateProfile:
+        if not self.profile_path.exists():
+            fallback = Path("config/profile.example.yaml")
+            if fallback.exists():
+                with open(fallback, "r", encoding="utf-8") as f:
+                    return CandidateProfile.from_dict(yaml.safe_load(f))
+            raise FileNotFoundError(f"Profile configuration not found: {self.profile_path}")
+
+        with open(self.profile_path, "r", encoding="utf-8") as f:
+            return CandidateProfile.from_dict(yaml.safe_load(f))
+
+    def run(
+        self,
+        observations: Optional[List[SourceObservation]] = None,
+        source_decisions: Optional[List[SourceLifecycleDecision]] = None,
+        monitored_sources: Optional[List[SourceRecord]] = None,
+        entity_resolver_fn: Optional[
+            Callable[[SourceObservation, List[Opportunity]], EntityResolutionDecision]
+        ] = None,
+        evaluator_fn: Optional[
+            Callable[[CandidateProfile, SourceObservation], EvaluationResult]
+        ] = None,
+        run_date: Optional[str] = None,
+    ) -> RadarRunOutcome:
+        """
+        Executes a full Autonomous Radar run.
+        """
+        if not run_date:
+            run_date = datetime.now().strftime("%Y-%m-%d")
+
+        profile = self.load_profile()
+        source_registry = SourceRegistry(
+            seed_path=self.seed_sources_path, data_dir=self.data_dir
+        )
+
+        # 1. Apply Agent Source Lifecycle Decisions (Discovery / Degradation / Reactivation)
+        if source_decisions:
+            for s_dec in source_decisions:
+                source_registry.apply_lifecycle_decision(s_dec)
+
+        # 2. Determine Monitored Sources
+        if monitored_sources is not None:
+            active_monitoring_set = monitored_sources
+        else:
+            # Default bounded monitoring set: active seed/local sources matching candidate tracks/regions
+            candidate_tracks = set()
+            for t in profile.tracks:
+                if isinstance(t, dict):
+                    candidate_tracks.add(t.get("name") or t.get("track_id") or "")
+                elif isinstance(t, str):
+                    candidate_tracks.add(t)
+
+            active_monitoring_set = [
+                s for s in source_registry.get_active_sources()
+                if not s.track or any(t in candidate_tracks for t in s.track)
+            ]
+
+        # Record technical execution fact for monitored sources
+        for src in active_monitoring_set:
+            source_registry.record_monitoring_fact(src.source_id, "success")
+
+        # 3. Process Observations via Incremental Working State
+        incoming_observations = observations or []
+        session = IncrementalResolutionSession(data_dir=self.data_dir)
+
+        for i, obs in enumerate(incoming_observations):
+            packet, candidates = session.prepare_observation_packet(obs)
+
+            if entity_resolver_fn:
+                decision = entity_resolver_fn(obs, candidates)
+            elif len(session.working_opportunities) == 0:
+                decision = EntityResolutionDecision(
+                    resolution="different", rationale="Bootstrap initial opportunity"
+                )
+            else:
+                raise ValueError(
+                    f"Working state contains opportunities ({len(session.working_opportunities)} records), "
+                    "but no entity_resolver_fn was provided. Entity resolution is required once working state contains opportunities."
+                )
+
+            eval_res = None
+            if decision.resolution in ("different", "update", "uncertain"):
+                if not evaluator_fn:
+                    raise ValueError(
+                        f"Missing required evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
+                    )
+                eval_res = evaluator_fn(profile, obs)
+
+            session.stage_decision(obs, decision, eval_res)
+
+        # 4. Atomic Commit of Opportunities and Sources
+        network_changes = source_registry.network_changes
+        summary = session.commit_and_finalize(
+            reports_dir=self.reports_dir,
+            run_date=run_date,
+            network_changes=network_changes,
+        )
+        source_registry.save_local_state()
+
+        # 5. Build Outcome
+        discovered_count = sum(1 for c in network_changes if c.get("type") == "discovered")
+        has_attention = summary["review_count"] > 0 or any(
+            c.get("type") == "degraded" for c in network_changes
+        )
+        status = "attention" if has_attention else "success"
+
+        summary_msg = (
+            f"Radar Run ({run_date}) 完成：监控 {len(active_monitoring_set)} 个渠道，"
+            f"新发现 {discovered_count} 个渠道；"
+            f"新增推荐机会 {summary['recommended_count']} 个，"
+            f"重点更新 {summary['updated_opportunities_count']} 个，"
+            f"待确认 {summary['review_count']} 个。"
+        )
+
+        return RadarRunOutcome(
+            status=status,
+            run_date=run_date,
+            monitored_sources_count=len(active_monitoring_set),
+            discovered_sources_count=discovered_count,
+            new_opportunities_count=summary["new_opportunities_count"],
+            updated_opportunities_count=summary["updated_opportunities_count"],
+            deduped_same_count=summary["deduped_same_count"],
+            recommended_count=summary["recommended_count"],
+            review_count=summary["review_count"],
+            network_changes_count=len(network_changes),
+            report_path=summary["report_path"],
+            summary_message=summary_msg,
+        )
