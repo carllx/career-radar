@@ -1,0 +1,19 @@
+# Career Radar - Candidate Profile Example Template (Public / Desensitized)
+candidate:
+  age: 30
+  degree: "master"
+  degree_field: "Computer Science & Digital Media"
+  teaching_experience_years: 3
+  industry_experience_years: 4
+  tracks:
+    - name: "higher_education_teaching"
+      priority: 1
+    - name: "vocational_education"
+      priority: 2
+  regions:
+    p1: ["Guangzhou"]
+    p2: ["Foshan", "Dongguan"]
+    p3: ["Greater Bay Area"]
+  hard_constraints:
+    min_degree: "master"
+    max_age: 35

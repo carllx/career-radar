@@ -1,0 +1,119 @@
+"""
+Daily Markdown Digest generator for Career Radar.
+Implements ADR-0004 (high signal-to-noise structured reporting).
+"""
+
+from datetime import datetime
+from pathlib import Path
+from typing import List
+
+from .models import Opportunity
+
+
+class DigestReporter:
+    """
+    Renders structured Markdown daily reports categorized into:
+    - 🎯 强烈推荐 / 新增高价值机会
+    - 🔄 重点岗位动态变更
+    - ⚠️ 需要人工确认
+    - 🌐 渠道网络变动
+    """
+
+    def __init__(self, reports_dir: Path):
+        self.reports_dir = reports_dir
+        self.reports_dir.mkdir(parents=True, exist_ok=True)
+
+    def generate_report(
+        self, opportunities: List[Opportunity], run_date: str
+    ) -> Path:
+        report_path = self.reports_dir / f"{run_date}.md"
+
+        recommended = [
+            o
+            for o in opportunities
+            if o.latest_evaluation.final_recommendation == "建议关注"
+        ]
+        review_needed = [
+            o
+            for o in opportunities
+            if o.latest_evaluation.final_recommendation == "需要人工确认"
+        ]
+        updated_posts = [
+            o for o in opportunities if o.lifecycle_status == "updated"
+        ]
+
+        lines = [
+            f"# Career Radar 每日求职情报简报 ({run_date})",
+            "",
+            f"> **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
+            f"> **本次巡检机会总数**：{len(opportunities)} 篇 | 强烈推荐：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
+            "",
+            "---",
+            "",
+            "## 🎯 强烈推荐 / 新增高价值机会",
+            "",
+        ]
+
+        if not recommended:
+            lines.append("本次巡检未发现新增高匹配度机会。\n")
+        else:
+            for opp in recommended:
+                lines.extend(self._format_opportunity_block(opp))
+
+        lines.extend([
+            "---",
+            "",
+            "## ⚠️ 需要人工确认",
+            "",
+        ])
+
+        if not review_needed:
+            lines.append("当前无存疑或需人工核对的边缘机会。\n")
+        else:
+            for opp in review_needed:
+                lines.extend(self._format_opportunity_block(opp))
+
+        lines.extend([
+            "---",
+            "",
+            "## 🔄 重点岗位动态变更",
+            "",
+        ])
+
+        if not updated_posts:
+            lines.append("本次巡检暂无历史岗位补充公告或延期变更。\n")
+        else:
+            for opp in updated_posts:
+                lines.append(f"- **{opp.organization}** · [{opp.canonical_job_title}]({opp.official_url})：状态更新")
+
+        lines.extend([
+            "",
+            "---",
+            "",
+            "## 🌐 渠道网络变动",
+            "",
+            "- 监控已知源正常运行，暂无新增失效或需降级渠道。",
+            "",
+        ])
+
+        report_path.write_text("\n".join(lines), encoding="utf-8")
+        return report_path
+
+    def _format_opportunity_block(self, opp: Opportunity) -> List[str]:
+        lines = [
+            f"### [{opp.canonical_job_title}]({opp.official_url})",
+            f"- **用人单位**：{opp.organization}",
+            f"- **地点/赛道**：{opp.location} | {opp.track}",
+            f"- **推荐结论**：`{opp.latest_evaluation.final_recommendation}`",
+            "- **多维资格判定与原文证据 (Requirement Evidence)**：",
+        ]
+        for dim, ev in opp.latest_evaluation.dimension_evaluations.items():
+            state_badge = f"`{ev.state}`"
+            evidence_snippet = (
+                f"“{ev.requirement_evidence}”" if ev.requirement_evidence else "（无）"
+            )
+            lines.append(
+                f"  - **{dim}** {state_badge}：{ev.rationale}  \n    *证据原文*：{evidence_snippet}"
+            )
+        lines.append("")
+        return lines

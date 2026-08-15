@@ -1,0 +1,65 @@
+[
+  {
+    "observation_id": "obs_mock_001",
+    "announcement_id": "ann_mock_001",
+    "source_id": "gd_hrss_official",
+    "source_name": "广东省人力资源和社会保障厅",
+    "announcement_title": "2026年广东省属高校专任教师公开招聘公告",
+    "job_title": "数字媒体技术专任教师",
+    "organization": "广东轻工职业技术大学",
+    "location": "Guangzhou",
+    "track": "vocational_education",
+    "official_url": "http://hrss.gd.gov.cn/zwgk/gsgg/content_001.html",
+    "observed_at": "2026-08-15T09:00:00+08:00",
+    "extracted_requirements": {
+      "age_text": "35周岁以下（1991年1月1日以后出生）",
+      "education_text": "具有硕士研究生及以上学历并取得硕士及以上学位",
+      "formal_qualification_text": "计算机科学与技术（0812）、数字媒体技术（0854）专业方向",
+      "capability_fit_text": "能胜任数字交互设计、三维动画与虚拟制作相关课程讲授",
+      "teaching_experience_text": "具有高校或职校相关课程带教或教学经验者优先",
+      "industry_experience_text": "具有相关行业工程实务经验者优先"
+    }
+  },
+  {
+    "observation_id": "obs_mock_002",
+    "announcement_id": "ann_mock_002",
+    "source_id": "scnu_rsc",
+    "source_name": "华南师范大学人事处",
+    "announcement_title": "华南师范大学2026年高层次与紧缺人才引进公告",
+    "job_title": "交叉学科创新教师",
+    "organization": "华南师范大学",
+    "location": "Guangzhou",
+    "track": "higher_education_teaching",
+    "official_url": "https://rsc.scnu.edu.cn/recruit/2026_002.html",
+    "observed_at": "2026-08-15T09:10:00+08:00",
+    "extracted_requirements": {
+      "age_text": "原则上不超过35周岁，特别优秀者可适当放宽",
+      "education_text": "硕士研究生及以上，具备相关学术成果",
+      "formal_qualification_text": "设计学、计算机科学交叉方向（未限制严格专业目录代码）",
+      "capability_fit_text": "承担跨学科综合实践课程与科研课题",
+      "teaching_experience_text": "具备带教能力",
+      "industry_experience_text": "不作硬性要求"
+    }
+  },
+  {
+    "observation_id": "obs_mock_003",
+    "announcement_id": "ann_mock_003",
+    "source_id": "sysu_rcb",
+    "source_name": "中山大学人才招聘网",
+    "announcement_title": "中山大学2026年专任教师招聘启事",
+    "job_title": "理论物理教授/副教授",
+    "organization": "中山大学",
+    "location": "Guangzhou",
+    "track": "higher_education_teaching",
+    "official_url": "https://rcb.sysu.edu.cn/recruit/2026_003.html",
+    "observed_at": "2026-08-15T09:20:00+08:00",
+    "extracted_requirements": {
+      "age_text": "28周岁以下",
+      "education_text": "必须具备博士研究生学历与博士学位，博士后出站人员优先",
+      "formal_qualification_text": "理论物理（070201）专业博士",
+      "capability_fit_text": "主讲理论物理前沿课程并主持国家级项目",
+      "teaching_experience_text": "需具备2年以上海外高校全英文主讲经历",
+      "industry_experience_text": "不适用"
+    }
+  }
+]
