@@ -27,7 +27,7 @@ from .models import (
     SourceObservation,
 )
 from .runner import IncrementalResolutionSession
-from .sources import SourceLifecycleDecision, SourceRecord, SourceRegistry
+from .sources import MonitoringFact, SourceLifecycleDecision, SourceRecord, SourceRegistry
 
 
 @dataclass
@@ -86,7 +86,7 @@ class RadarOrchestrator:
         self,
         observations: Optional[List[SourceObservation]] = None,
         source_decisions: Optional[List[SourceLifecycleDecision]] = None,
-        monitored_sources: Optional[List[SourceRecord]] = None,
+        monitoring_facts: Optional[List[MonitoringFact]] = None,
         entity_resolver_fn: Optional[
             Callable[[SourceObservation, List[Opportunity]], EntityResolutionDecision]
         ] = None,
@@ -96,7 +96,7 @@ class RadarOrchestrator:
         run_date: Optional[str] = None,
     ) -> RadarRunOutcome:
         """
-        Executes a full Autonomous Radar run.
+        Executes a deterministic pipeline run driven by Agent decisions and actual execution facts.
         """
         if not run_date:
             run_date = datetime.now().strftime("%Y-%m-%d")
@@ -111,20 +111,15 @@ class RadarOrchestrator:
             for s_dec in source_decisions:
                 source_registry.apply_lifecycle_decision(s_dec)
 
-        # 2. Determine Monitored Sources
-        if monitored_sources is not None:
-            active_monitoring_set = monitored_sources
-        else:
-            # Default bounded monitoring set: active seed/local sources matching candidate tracks/regions
-            candidate_tracks = profile.track_names()
-            active_monitoring_set = [
-                s for s in source_registry.get_active_sources()
-                if not s.track or any(t in candidate_tracks for t in s.track)
-            ]
-
-        # Record technical execution fact for monitored sources
-        for src in active_monitoring_set:
-            source_registry.record_monitoring_fact(src.source_id, "success")
+        # 2. Record Mechanical Technical Execution Facts from actual monitoring
+        actual_monitored_count = 0
+        has_monitoring_failure = False
+        if monitoring_facts:
+            actual_monitored_count = len(monitoring_facts)
+            for fact in monitoring_facts:
+                source_registry.record_monitoring_fact(fact)
+                if fact.technical_status not in ("success", "ok"):
+                    has_monitoring_failure = True
 
         # 3. Process Observations via Incremental Working State
         incoming_observations = observations or []
@@ -166,13 +161,15 @@ class RadarOrchestrator:
 
         # 5. Build Outcome
         discovered_count = sum(1 for c in network_changes if c.get("type") == "discovered")
-        has_attention = summary["review_count"] > 0 or any(
-            c.get("type") == "degraded" for c in network_changes
+        has_attention = (
+            summary["review_count"] > 0
+            or any(c.get("type") == "degraded" for c in network_changes)
+            or has_monitoring_failure
         )
         status = "attention" if has_attention else "success"
 
         summary_msg = (
-            f"Radar Run ({run_date}) 完成：监控 {len(active_monitoring_set)} 个渠道，"
+            f"Radar Run ({run_date}) 完成：实际监测 {actual_monitored_count} 个渠道，"
             f"新发现 {discovered_count} 个渠道；"
             f"新增推荐机会 {summary['recommended_count']} 个，"
             f"重点更新 {summary['updated_opportunities_count']} 个，"
@@ -182,7 +179,7 @@ class RadarOrchestrator:
         return RadarRunOutcome(
             status=status,
             run_date=run_date,
-            monitored_sources_count=len(active_monitoring_set),
+            monitored_sources_count=actual_monitored_count,
             discovered_sources_count=discovered_count,
             new_opportunities_count=summary["new_opportunities_count"],
             updated_opportunities_count=summary["updated_opportunities_count"],

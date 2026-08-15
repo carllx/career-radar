@@ -14,7 +14,7 @@ from .orchestrator import RadarOrchestrator, RadarRunOutcome
 from .resolver import EntityResolutionApplier
 from .retriever import CandidateRetriever
 from .runner import IncrementalResolutionSession, run_radar_pipeline
-from .sources import SourceLifecycleDecision, SourceRecord, SourceRegistry
+from .sources import MonitoringFact, SourceLifecycleDecision, SourceRecord, SourceRegistry
 from .store import OpportunityStore
 
 __version__ = "0.1.0"
@@ -32,6 +32,7 @@ __all__ = [
     "CandidateRetriever",
     "IncrementalResolutionSession",
     "run_radar_pipeline",
+    "MonitoringFact",
     "SourceLifecycleDecision",
     "SourceRecord",
     "SourceRegistry",

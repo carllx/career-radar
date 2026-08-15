@@ -58,6 +58,18 @@ class SourceRecord:
 
 
 @dataclass
+class MonitoringFact:
+    """
+    Mechanical technical observation from actually visiting or fetching a source.
+    """
+    source_id: str
+    technical_status: str  # "success", "blocked_by_captcha", "failed", "content_type_mismatch", etc.
+    checked_url: Optional[str] = None
+    checked_at: Optional[str] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
 class SourceLifecycleDecision:
     """
     Agent semantic decision on source lifecycle transitions.
@@ -65,7 +77,7 @@ class SourceLifecycleDecision:
     - 'discover': add newly discovered candidate recruitment channel
     - 'degrade': mark existing channel as degraded with explicit rationale
     - 'reactivate': restore degraded channel back to active
-    - 'keep': maintain current status while updating monitoring timestamp
+    - 'keep': maintain current status
     """
     source_id: str
     action: str  # "discover", "degrade", "reactivate", "keep"
@@ -138,6 +150,16 @@ class SourceRegistry:
     def get_active_sources(self) -> List[SourceRecord]:
         return [s for s in self.get_all_sources() if s.lifecycle_status == "active"]
 
+    def get_candidate_sources(self) -> List[SourceRecord]:
+        """
+        Returns all sources available for Agent monitoring candidate consideration
+        (both active seeds and previously discovered sources).
+        """
+        return [
+            s for s in self.get_all_sources()
+            if s.lifecycle_status in ("active", "discovered")
+        ]
+
     def get_source(self, source_id: str) -> Optional[SourceRecord]:
         if source_id in self.local_sources:
             return self.local_sources[source_id]
@@ -145,24 +167,38 @@ class SourceRegistry:
 
     def record_monitoring_fact(
         self,
-        source_id: str,
-        technical_status: str,
+        fact: Union[MonitoringFact, str],
+        technical_status: Optional[str] = None,
         monitored_at: Optional[str] = None,
+        checked_url: Optional[str] = None,
     ) -> SourceRecord:
         """
-        Mechanically records technical execution fact (e.g. success, captcha, failure)
-        without mutating semantic lifecycle policy.
+        Mechanically records technical execution fact from actual monitoring check.
         """
-        now = monitored_at or datetime.now().isoformat()
+        if isinstance(fact, MonitoringFact):
+            source_id = fact.source_id
+            tech_status = fact.technical_status
+            now = fact.checked_at or datetime.now().isoformat()
+            url = fact.checked_url
+        else:
+            source_id = fact
+            tech_status = technical_status or "success"
+            now = monitored_at or datetime.now().isoformat()
+            url = checked_url
+
         src = self.get_source(source_id)
         if not src:
             raise KeyError(f"Source '{source_id}' not found in registry")
 
-        # Copy to local state to record runtime facts
+        meta = dict(src.metadata or {})
+        if url:
+            meta["last_checked_url"] = url
+
         updated = SourceRecord.from_dict({
             **src.to_dict(),
             "last_monitored_at": now,
-            "last_technical_status": technical_status,
+            "last_technical_status": tech_status,
+            "metadata": meta,
         })
         self.local_sources[source_id] = updated
         return updated

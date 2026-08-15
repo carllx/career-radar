@@ -131,7 +131,7 @@ class DigestReporter:
         ])
 
         if not network_changes:
-            lines.append("- 本轮巡检已知源正常运行，暂无新增渠道或状态降级变动。\n")
+            lines.append("- 本轮无渠道网络状态变化。\n")
         else:
             for chg in network_changes:
                 chg_type = chg.get("type")

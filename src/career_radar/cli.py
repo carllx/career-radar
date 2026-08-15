@@ -1,6 +1,8 @@
 """
-CLI entry point for Career Radar manual trigger and scheduler execution.
-Invokes the unified RadarOrchestrator.
+Deterministic CLI runner utility for Career Radar.
+Executes batch validation and deterministic pipeline steps.
+Note: Autonomous orchestration, open web discovery, and semantic qualification evaluation
+are driven by the IDE Agent via the project-local skill (.agents/skills/career-radar/SKILL.md).
 """
 
 import argparse
@@ -13,7 +15,7 @@ from .orchestrator import RadarOrchestrator
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Career Radar — Autonomous Intelligence and Recruitment Tracker"
+        description="Career Radar — Deterministic Pipeline Runner Utility"
     )
     parser.add_argument(
         "--profile",

@@ -1,11 +1,11 @@
 """
 Highest Testing Seam for Career Radar MVP-1 (Issue #12).
 Tests the unified Autonomous Radar Orchestrator across:
-- Slice A: Known-source Monitoring & technical execution fact recording.
-- Slice B: Open Source Discovery & local .data/sources.json persistence (without mutating public seed).
+- Slice A: Known-source Monitoring & genuine technical execution fact recording (no fake success).
+- Slice B: Open Source Discovery & local .data/sources.json persistence (visible in future candidate networks).
 - Slice C: Source Degradation & data-driven Section 4 in Daily Digest.
-- Slice D: Unified Full Orchestrator Run (Monitoring + Discovery + Opportunities + 4-section Digest).
-- Slice E: Trigger equivalence (Manual invocation and Scheduled invocation call the same contract).
+- Slice D: Unified Full Orchestrator Run (Monitoring Facts + Discovery + Opportunities + 4-section Digest).
+- Slice E: Trigger equivalence (Manual invocation and Scheduled invocation execute the same contract).
 """
 
 import json
@@ -22,7 +22,12 @@ from career_radar.models import (
     SourceObservation,
 )
 from career_radar.orchestrator import RadarOrchestrator, RadarRunOutcome
-from career_radar.sources import SourceLifecycleDecision, SourceRecord, SourceRegistry
+from career_radar.sources import (
+    MonitoringFact,
+    SourceLifecycleDecision,
+    SourceRecord,
+    SourceRegistry,
+)
 
 
 @pytest.fixture
@@ -112,7 +117,7 @@ def make_eval_result(state: str = "PASS") -> EvaluationResult:
         final_recommendation="建议关注" if state == "PASS" else "需要人工确认",
         dimension_evaluations={
             "Age": DimensionEvaluation(dimension="Age", state="PASS", requirement_evidence="35周岁以下", rationale="年龄符合"),
-            "Education": DimensionEvaluation(dimension="Education", state=state, requirement_evidence="学历要求", rationale="学历评定"),
+            "Education": DimensionEvaluation(dimension="Education", state=state, requirement_evidence="博士研究生", rationale="学历评定"),
             "Formal Qualification": DimensionEvaluation(dimension="Formal Qualification", state="PASS", requirement_evidence="0812 计算机", rationale="专业对口"),
             "Capability Fit": DimensionEvaluation(dimension="Capability Fit", state="PASS", requirement_evidence="教学科研岗", rationale="能力符合"),
             "Teaching Experience": DimensionEvaluation(dimension="Teaching Experience", state="PASS", requirement_evidence="不限", rationale="经验符合"),
@@ -124,11 +129,12 @@ def make_eval_result(state: str = "PASS") -> EvaluationResult:
 
 class TestRadarOrchestratorSeam:
 
-    def test_slice_a_known_source_monitoring(self, temp_env):
+    def test_slice_a_known_source_monitoring_with_genuine_facts(self, temp_env):
         """
-        Slice A: Known-source Monitoring
-        Agent executes monitoring on relevant active seed sources.
-        Records execution facts to local .data/sources.json without mutating public seed.
+        Slice A: Known-source Monitoring with genuine technical facts (no fake success).
+        Source A: technical_status = success
+        Source B: technical_status = failed (e.g. 500 error / blocked)
+        Untouched Source C: remains unmonitored with no fake facts.
         """
         orchestrator = RadarOrchestrator(
             profile_path=temp_env["profile_path"],
@@ -137,20 +143,40 @@ class TestRadarOrchestratorSeam:
             reports_dir=temp_env["reports_dir"],
         )
 
-        outcome = orchestrator.run(run_date="2026-08-15")
+        facts = [
+            MonitoringFact(
+                source_id="gd_hrss_official",
+                technical_status="success",
+                checked_url="http://hrss.gd.gov.cn/zwgk/gsgg/",
+                checked_at="2026-08-15T09:00:00",
+            ),
+            MonitoringFact(
+                source_id="scnu_rsc",
+                technical_status="failed",
+                checked_url="https://rsc.scnu.edu.cn/",
+                checked_at="2026-08-15T09:01:00",
+            ),
+        ]
 
-        assert outcome.status == "success"
-        # Bounded monitoring set: only sources matching candidate tracks (higher_education_teaching)
+        outcome = orchestrator.run(monitoring_facts=facts, run_date="2026-08-15")
+
+        assert outcome.status == "attention"  # scnu_rsc failed requires attention
         assert outcome.monitored_sources_count == 2
 
-        # Check local .data/sources.json has records
+        # Check local .data/sources.json has exact facts
         local_sources_file = temp_env["data_dir"] / "sources.json"
         assert local_sources_file.exists()
         with open(local_sources_file, "r", encoding="utf-8") as f:
             local_data = json.load(f)
-        assert len(local_data) == 2
-        assert all(s["last_technical_status"] == "success" for s in local_data)
-        assert all(s["last_monitored_at"] is not None for s in local_data)
+
+        hrss_rec = next(s for s in local_data if s["source_id"] == "gd_hrss_official")
+        scnu_rec = next(s for s in local_data if s["source_id"] == "scnu_rsc")
+        assert hrss_rec["last_technical_status"] == "success"
+        assert scnu_rec["last_technical_status"] == "failed"
+
+        # Untouched source must NOT have fake facts in local state
+        unrelated_rec = next((s for s in local_data if s["source_id"] == "unrelated_industry_hub"), None)
+        assert unrelated_rec is None or unrelated_rec.get("last_monitored_at") is None
 
         # Public seed must remain pristine
         with open(temp_env["seeds_path"], "r", encoding="utf-8") as f:
@@ -158,11 +184,11 @@ class TestRadarOrchestratorSeam:
         assert len(seed_data) == 3
         assert "last_monitored_at" not in seed_data[0]
 
-    def test_slice_b_open_source_discovery(self, temp_env):
+    def test_slice_b_open_source_discovery_visible_in_next_run(self, temp_env):
         """
-        Slice B: Open Source Discovery
-        Agent discovers an unseeded candidate source, verifies it, and persists to local .data/sources.json
-        with lifecycle_status='discovered' without modifying config/sources.seed.json.
+        Slice B: Open Source Discovery & Next-Run Candidate Visibility
+        Agent discovers unseeded candidate source -> persists to .data/sources.json as 'discovered'.
+        In next run, SourceRegistry.get_candidate_sources() includes this discovered source!
         """
         orchestrator = RadarOrchestrator(
             profile_path=temp_env["profile_path"],
@@ -198,7 +224,11 @@ class TestRadarOrchestratorSeam:
         discovered_entry = next(s for s in local_data if s["source_id"] == "gdaib_rsc")
         assert discovered_entry["lifecycle_status"] == "discovered"
         assert discovered_entry["origin"] == "discovered"
-        assert discovered_entry["discovered_at"] is not None
+
+        # Verify candidate visibility in subsequent registry loading
+        registry_next = SourceRegistry(seed_path=temp_env["seeds_path"], data_dir=temp_env["data_dir"])
+        candidate_ids = [s.source_id for s in registry_next.get_candidate_sources()]
+        assert "gdaib_rsc" in candidate_ids
 
         # Check Report Section 4 renders new discovered source
         report_file = Path(outcome.report_path)
@@ -248,11 +278,11 @@ class TestRadarOrchestratorSeam:
         assert "⚠️ **渠道降级**：[华南师范大学人事处](https://rsc.scnu.edu.cn/)" in content
         assert "站点发生永久性 404" in content
 
-    def test_slice_d_unified_full_run(self, temp_env):
+    def test_slice_d_unified_full_run_mock_network(self, temp_env):
         """
-        Slice D: Unified Full Run
+        Slice D: Unified Full Run with Mock Source Network
         In the same run:
-        - Known-source monitoring occurs
+        - Known-source monitoring occurs with real MonitoringFacts
         - Source discovery occurs
         - Incoming announcements are extracted into SourceObservations
         - Entity resolution disambiguates incoming opportunities
@@ -267,7 +297,17 @@ class TestRadarOrchestratorSeam:
             reports_dir=temp_env["reports_dir"],
         )
 
-        # 1. Discovery decision
+        # 1. Monitoring Facts (Mock Network)
+        facts = [
+            MonitoringFact(
+                source_id="gd_hrss_official",
+                technical_status="success",
+                checked_url="http://hrss.gd.gov.cn/zwgk/gsgg/",
+                checked_at="2026-08-15T09:00:00",
+            )
+        ]
+
+        # 2. Discovery decision
         discovery_decision = SourceLifecycleDecision(
             source_id="gdaib_rsc",
             action="discover",
@@ -277,7 +317,7 @@ class TestRadarOrchestratorSeam:
             rationale="发现新高职招聘渠道",
         )
 
-        # 2. Observations
+        # 3. Observations
         obs_1 = SourceObservation(
             observation_id="obs_001",
             announcement_id="ann_001",
@@ -322,6 +362,7 @@ class TestRadarOrchestratorSeam:
 
         outcome = orchestrator.run(
             observations=[obs_1, obs_2],
+            monitoring_facts=facts,
             source_decisions=[discovery_decision],
             entity_resolver_fn=mock_resolver,
             evaluator_fn=mock_evaluator,
@@ -329,6 +370,7 @@ class TestRadarOrchestratorSeam:
         )
 
         assert outcome.status == "attention"  # Has 1 review_count
+        assert outcome.monitored_sources_count == 1
         assert outcome.new_opportunities_count == 2
         assert outcome.recommended_count == 1
         assert outcome.review_count == 1
@@ -346,6 +388,7 @@ class TestRadarOrchestratorSeam:
         with open(sources_file, "r", encoding="utf-8") as f:
             s_data = json.load(f)
         assert any(s["source_id"] == "gdaib_rsc" for s in s_data)
+        assert any(s["source_id"] == "gd_hrss_official" and s["last_technical_status"] == "success" for s in s_data)
 
         # Check 4-section Daily Digest
         report_file = Path(outcome.report_path)
