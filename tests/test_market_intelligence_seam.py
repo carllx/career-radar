@@ -344,3 +344,5 @@ def test_learning_target_does_not_mechanically_set_capability_fit_pass(temp_inte
 
     assert eval_res.final_recommendation == "明显不符合"
     assert eval_res.dimension_evaluations["Capability Fit"].state == "FAIL"
+
+

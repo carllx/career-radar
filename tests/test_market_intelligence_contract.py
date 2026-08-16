@@ -198,8 +198,47 @@ def test_legacy_opportunity_loads_safely_without_market_intelligence(temp_intel_
     assert loaded[0].market_intelligence is None
 
 
-def test_watch_learn_different_missing_market_intelligence_fails_fast():
-    """Validates that EntityResolutionApplier rejects WATCH_LEARN on 'different' when market_intelligence is missing."""
+def test_market_intelligence_validator_normalizes_empty_dict_to_all_unknown():
+    """Validates that an empty dict {} is normalized to a valid MarketIntelligence with all 8 fields set to 'UNKNOWN'."""
+    normalized = MarketIntelligenceValidator.validate_and_normalize({})
+    assert isinstance(normalized, MarketIntelligence)
+    for field in CANONICAL_MARKET_INTELLIGENCE_FIELDS:
+        assert getattr(normalized, field) == "UNKNOWN"
+
+
+def test_build_market_intelligence_packet_canonical_contract_instructions():
+    """Validates that build_market_intelligence_packet includes strict semantic instructions."""
+    profile = CandidateProfile(age=30, degree="master")
+    obs = SourceObservation(
+        observation_id="obs_01",
+        announcement_id="ann_01",
+        source_id="src_01",
+        source_name="Src",
+        announcement_title="Title",
+        job_title="Job",
+        organization="Org",
+        location="City",
+        track="track",
+        official_url="https://example.com",
+        observed_at="2026-08-16T08:00:00",
+        extracted_requirements={},
+    )
+    dim_evals = {dim: DimensionEvaluation(dimension=dim, state="PASS", requirement_evidence="OK", rationale="OK") for dim in CANONICAL_DIMENSIONS}
+    eval_res = EvaluationResult(final_recommendation="建议关注", dimension_evaluations=dim_evals, evaluated_at="2026-08-16T08:00:00")
+    intent_dec = OpportunityIntentDecision(opportunity_intent="WATCH_LEARN", intent_rationale="Watch")
+
+    packet = build_market_intelligence_packet(profile, obs, eval_res, intent_dec)
+    contract = packet["canonical_contract"]
+    assert len(contract["canonical_fields"]) == 8
+    instructions_text = " ".join(contract["instructions"])
+    assert "brief, deliverables, content_type" in instructions_text
+    assert "Learning Target != Proven Capability" in instructions_text
+    assert "Market Intelligence MUST NOT modify Eligibility" in instructions_text
+
+
+@pytest.mark.parametrize("resolution", ["different", "update", "uncertain"])
+def test_watch_learn_missing_market_intelligence_fails_fast_all_resolutions(resolution: str):
+    """Validates that EntityResolutionApplier rejects WATCH_LEARN on different, update, and uncertain when market_intelligence is None."""
     applier = EntityResolutionApplier()
     obs = SourceObservation(
         observation_id="obs_wl_missing",
@@ -218,10 +257,28 @@ def test_watch_learn_different_missing_market_intelligence_fails_fast():
     dim_evals = {dim: DimensionEvaluation(dimension=dim, state="PASS", requirement_evidence="OK", rationale="OK") for dim in CANONICAL_DIMENSIONS}
     eval_res = EvaluationResult(final_recommendation="建议关注", dimension_evaluations=dim_evals, evaluated_at="2026-08-16T08:00:00")
     intent_dec = OpportunityIntentDecision(opportunity_intent="WATCH_LEARN", intent_rationale="Benchmark market")
-    decision = EntityResolutionDecision(resolution="different", rationale="New post")
-    opp_map = {}
+    decision = EntityResolutionDecision(
+        resolution=resolution,
+        target_opportunity_id="opp_existing" if resolution in ("update", "uncertain") else None,
+        rationale="Test resolution",
+    )
+    
+    prior_opp = Opportunity(
+        opportunity_id="opp_existing",
+        canonical_job_title="Role",
+        organization="Org",
+        location="City",
+        track="game_3d_production",
+        official_url="https://example.com/1",
+        lifecycle_status="active",
+        observations=[],
+        latest_evaluation=eval_res,
+        created_at="2026-08-15T08:00:00",
+        updated_at="2026-08-15T08:00:00",
+    )
+    opp_map = {"opp_existing": prior_opp} if resolution in ("update", "uncertain") else {}
 
-    with pytest.raises(ValueError, match="requires a valid MarketIntelligence"):
+    with pytest.raises(ValueError, match="requires a valid MarketIntelligence snapshot"):
         applier.apply_decision(
             obs, decision, opp_map, evaluation_result=eval_res, intent_decision=intent_dec, market_intelligence=None
         )

@@ -107,7 +107,7 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'update' requires a valid re-evaluated OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
-            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and market_intelligence is None:
                 raise ValueError(
                     f"EntityResolution 'update' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
                 )
@@ -138,7 +138,7 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'different' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
-            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and market_intelligence is None:
                 raise ValueError(
                     f"EntityResolution 'different' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
                 )
@@ -177,7 +177,7 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'uncertain' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
-            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and market_intelligence is None:
                 raise ValueError(
                     f"EntityResolution 'uncertain' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
                 )

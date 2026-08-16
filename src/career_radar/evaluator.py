@@ -291,6 +291,13 @@ def build_market_intelligence_packet(
         },
         "canonical_contract": {
             "canonical_fields": list(CANONICAL_MARKET_INTELLIGENCE_FIELDS),
+            "instructions": [
+                "Output exactly the 8 canonical Market Intelligence fields: brief, deliverables, content_type, timeline_volume, revision_quality_rules, requested_tools_workflow, budget_compensation, use_case.",
+                "Derive facts strictly from the provided first-party announcement and attachment evidence only.",
+                "Missing or unsupported facts must be 'UNKNOWN'. Do not speculate, extrapolate, or hallucinate missing budget, workflow, deliverables, volume, timeline, or revision rules.",
+                "Market Intelligence MUST NOT modify Eligibility evaluation conclusions or dimension states.",
+                "A requested market skill or tool in the announcement MUST NOT be treated as proof of Candidate Capability (Learning Target != Proven Capability).",
+            ],
             "normalization_rule": (
                 "Missing or unsupported facts must be 'UNKNOWN'. "
                 "Do not speculate or hallucinate missing budget, workflow, deliverables, volume, or revision rules."

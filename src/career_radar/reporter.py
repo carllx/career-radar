@@ -41,6 +41,14 @@ class DigestReporter:
         report_path = self.reports_dir / f"{run_date}.md"
         self.reports_dir.mkdir(parents=True, exist_ok=True)
 
+        if new_opportunity_ids is not None or updated_opportunity_ids is not None:
+            touched_ids = set(new_opportunity_ids or []) | set(updated_opportunity_ids or [])
+            touched_opps = [
+                o for o in opportunities if o.opportunity_id in touched_ids
+            ]
+        else:
+            touched_opps = opportunities
+
         if new_opportunity_ids is not None:
             target_opps = [
                 o for o in opportunities if o.opportunity_id in new_opportunity_ids
@@ -76,7 +84,7 @@ class DigestReporter:
 
         watch_learn_opps = [
             o
-            for o in target_opps
+            for o in touched_opps
             if o.opportunity_intent == "WATCH_LEARN" and o.market_intelligence is not None
         ]
 
@@ -92,10 +100,19 @@ class DigestReporter:
             "",
         ]
 
-        if not recommended:
-            lines.append("本次巡检未发现新增高匹配度机会。\n")
+        recommended_actionable = [
+            opp for opp in recommended if opp.opportunity_intent != "WATCH_LEARN"
+        ]
+
+        if not recommended_actionable:
+            if recommended:
+                lines.append(
+                    "本次新增的资格建议关注机会均为情报观察目标，详见下方【🔭 WATCH_LEARN / 市场情报观察】板块。\n"
+                )
+            else:
+                lines.append("本次巡检未发现新增高匹配度机会。\n")
         else:
-            for opp in recommended:
+            for opp in recommended_actionable:
                 lines.extend(self._format_opportunity_block(opp))
 
         lines.extend([
