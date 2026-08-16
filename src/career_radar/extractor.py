@@ -106,13 +106,13 @@ def fetch_and_extract_first_party_announcement(
         extraction_completeness = "incomplete"
         attachment_access = "failed"
     elif observations:
-        extraction_completeness = "complete"
+        extraction_completeness = "attachment_extraction_complete"
         attachment_access = "success" if downloaded_attachments else "none"
     elif downloaded_attachments and not observations:
-        extraction_completeness = "incomplete_or_no_jobs"
+        extraction_completeness = "no_attachment_observations"
         attachment_access = "success"
     else:
-        extraction_completeness = "no_concrete_roles"
+        extraction_completeness = "html_evidence_available"
         attachment_access = "none"
 
     report = {

@@ -220,6 +220,11 @@ class TestRadarOrchestratorSeam:
             source_id="scnu_rsc",
             action="degrade",
             rationale="站点发生永久性 404 重定向至旧系统且无招聘更新",
+            provenance={
+                "checked_url": "https://rsc.scnu.edu.cn/",
+                "checked_at": "2026-08-15T09:00:00+08:00",
+                "http_status": 404,
+            },
         )
 
         outcome = orchestrator.run(source_decisions=[degrade_decision], run_date="2026-08-15")

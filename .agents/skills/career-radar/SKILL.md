@@ -100,14 +100,14 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 ### 步骤 5：新渠道真实性核验与本地建档 (Source Verification & Lifecycle)
 - 对候选渠道必须实际访问并核验：机构真实性、当前活跃第一方招聘专栏及直达 URL（HTTP 200 不等于有效招聘专栏，维护页/升级页不可建档为可用渠道）；
 - 核验通过后由 Agent 签发 `SourceLifecycleDecision(action="discover")`，**必须在 `provenance` 中携带第一方核验证据**（如 `verification_url`、核验方法与时间戳），记录至本地 `.data/sources.json`；
-- 对已持久化但实际不可用/维护中的渠道，签发 `action="degrade"` 并记录审计理由；
+- 对已持久化但实际不可用/维护中的渠道，签发 `action="degrade"` 并**必须携带可审计的技术或访问证据**（如 `checked_url`、`checked_at`、`http_status`），完整保留历史 Provenance；
 - **严禁自动篡改公共种子库 `config/sources.seed.json`**。
 
 ### 步骤 6：第一方公告、HTML 证据包与附件切片提取 (Acquisition & Extraction)
 - 对目标第一方页面，调用 `fetch_and_extract_first_party_announcement` 获取结构化数据：
   - Helper 确定性解析并保留第一方 HTML 证据包（`title`, `body_text`, `headings`, `links`, `tables`, `attachments`）；
   - Helper 机械切片提取附件表格（`.xlsx`, `.docx`, text-native `.pdf`）；
-- **Agent 语义研判与 Observation 产出**：针对无附件的第一方 HTML 页面（包括 HTML 表格、招聘详情页、列表卡片），由 Agent 语义层研判是否存在具体岗位行/岗位块并产出包含丰富 Provenance 的 `SourceObservation`；
+- **Agent 语义研判与 Observation 产出**：无论页面是否包含附件，Agent 均在相关时审阅获取的第一方 HTML 证据包（包括 HTML 表格、招聘详情正文、列表卡片），研判是否存在具体岗位并产出包含丰富 Provenance 的 `SourceObservation`；
 - **Anti-Hallucination 边界**：若页面仅为泛化招聘宣传（如“欢迎关注人才招聘”）而无具体岗位，Agent 严格产出 0 `SourceObservation`，严禁从公告标题凭空捏造岗位。
 
 ### 步骤 7：高召回候选检索 (Candidate Retrieval)

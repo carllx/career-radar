@@ -255,14 +255,30 @@ class SourceRegistry:
             if not src:
                 raise KeyError(f"Source '{decision.source_id}' not found for degradation")
             
+            if not decision.provenance or not isinstance(decision.provenance, dict) or len(decision.provenance) == 0:
+                raise ValueError("Source degradation decision requires 'provenance' containing auditable technical or retrieval evidence.")
+            
+            has_degrade_evidence = any(
+                k in decision.provenance
+                for k in (
+                    "checked_url", "verification_url", "source_url", "verified_url",
+                    "http_status", "technical_status", "checked_at", "verified_at",
+                    "timestamp", "content_type", "evidence", "retrieval_evidence", "error"
+                )
+            )
+            if not has_degrade_evidence:
+                raise ValueError(
+                    "Source degradation decision provenance must contain auditable technical evidence "
+                    "(e.g. 'checked_url', 'checked_at', or 'http_status')."
+                )
+
             # Preserve prior provenance and record auditable degradation event
             prior_prov = dict(src.provenance or {})
             degrade_audit = {
                 "degraded_at": now,
                 "reason": decision.rationale or "渠道失效或不可访问",
+                "evidence": decision.provenance,
             }
-            if decision.provenance:
-                degrade_audit["evidence"] = decision.provenance
             prior_prov["degradation_audit"] = degrade_audit
 
             updated = SourceRecord.from_dict({
