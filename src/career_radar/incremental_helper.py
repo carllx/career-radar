@@ -54,6 +54,21 @@ class IncrementalAcquisitionHelper:
                 results.append(urljoin(listing_url, u))
         return results
 
+    @staticmethod
+    def has_listing_selection_config(source: SourceRecord) -> bool:
+        """
+        Mechanically determines if a source has an explicit detail URL selection configuration.
+        Approved configurations: detail_url_pattern / url_pattern, detail_url, detail_link_index.
+        """
+        metadata = source.metadata or {}
+        if metadata.get("detail_url_pattern") or metadata.get("url_pattern"):
+            return True
+        if metadata.get("detail_url"):
+            return True
+        if metadata.get("detail_link_index") is not None:
+            return True
+        return False
+
     @classmethod
     def extract_selected_urls(
         cls,
@@ -114,15 +129,15 @@ class IncrementalAcquisitionHelper:
     ) -> Optional[str]:
         """
         Computes a stable deterministic SHA-256 fingerprint from mechanically selected listing links.
-        Canonical, sorted, unique URL set ensures order-only DOM noise does not trigger false change.
-        Zero semantic keyword filtering (no '招聘' / '教师' heuristics).
+        - If selector configured: returns SHA-256 of canonical selected_urls (including []).
+        - If NO selector configured: returns None (never fingerprints arbitrary page links).
         """
+        if not IncrementalAcquisitionHelper.has_listing_selection_config(source):
+            return None
+
         canonical_urls = IncrementalAcquisitionHelper.extract_selected_urls(
             listing_parsed, source, listing_url
         )
-        if not canonical_urls:
-            return None
-
         fingerprint_payload = json.dumps(canonical_urls, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest()
 
