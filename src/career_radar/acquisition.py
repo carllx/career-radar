@@ -1,25 +1,27 @@
 """
 Production Source Acquisition Executor & Audit Contract for Career Radar.
-Respects CONTEXT.md, ADR-0002, Issue #19 and parent Spec #20.
+Respects CONTEXT.md, ADR-0002, Issue #19, Spec #20 and Issue #21.
 
 Establishes:
 1. AcquisitionResult audit contract (mechanically recorded, traceable, hash-addressable);
 2. SourceAcquisitionExecutor for deterministic HTTP acquisition & raw evidence persistence;
-3. MonitoringFact derivation strictly anchored to AcquisitionResult in production;
-4. Defense against manual fake MonitoringFact injection in production execution.
+3. Reuses HTMLAnnouncementParser for deterministic structure extraction;
+4. MonitoringFact derivation strictly anchored to AcquisitionResult in production;
+5. Failed technical acquisitions produce failure facts and are excluded from Agent content evidence;
+6. Structural production entrypoint accepting only valid acquisition inputs.
 """
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
-import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 import uuid
 
-from bs4 import BeautifulSoup
-import requests
+import charset_normalizer
+import httpx
 
+from .parser import HTMLAnnouncementParser
 from .sources import MonitoringFact, SourceRecord
 
 
@@ -93,6 +95,7 @@ class SourceAcquisitionSessionResult:
 class SourceAcquisitionExecutor:
     """
     Deterministic executor for acquiring recruitment channels and persisting raw evidence.
+    Aligned with Spec #20 native HTTP baseline and reusing existing HTMLAnnouncementParser.
     """
 
     def __init__(
@@ -114,6 +117,7 @@ class SourceAcquisitionExecutor:
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36 CareerRadar/0.1.0"
         )
+        self.html_parser = HTMLAnnouncementParser()
 
     def _execute_http_get(self, url: str) -> Any:
         headers = {
@@ -125,44 +129,47 @@ class SourceAcquisitionExecutor:
             return self.transport.get(
                 url, headers=headers, timeout=self.timeout, verify=self.verify_ssl
             )
-        return requests.get(
-            url, headers=headers, timeout=self.timeout, verify=self.verify_ssl
+        return httpx.get(
+            url,
+            headers=headers,
+            timeout=self.timeout,
+            verify=self.verify_ssl,
+            follow_redirects=True,
         )
 
-    def _extract_dom_structure(self, html_text: str) -> Dict[str, Any]:
+    def _decode_html(self, raw_bytes: bytes, declared_content_type: str) -> str:
         """
-        Deterministically extracts title, tables, and structured text from HTML.
-        Does not perform semantic job matching.
+        Truthfully decodes HTML bytes respecting declared charset with robust fallback.
         """
-        soup = BeautifulSoup(html_text, "html.parser")
-        title = ""
-        if soup.title and soup.title.string:
-            title = soup.title.string.strip()
-        elif soup.find("h1"):
-            title = soup.find("h1").get_text(strip=True)
+        if not raw_bytes:
+            return ""
+        # Check declared charset in header
+        if "charset=" in declared_content_type.lower():
+            charset = declared_content_type.lower().split("charset=")[-1].split(";")[0].strip("\"' ")
+            try:
+                return raw_bytes.decode(charset)
+            except (LookupError, UnicodeDecodeError):
+                pass
 
-        extracted_tables = []
-        for table in soup.find_all("table"):
-            headers = [th.get_text(strip=True) for th in table.find_all("th")]
-            rows = []
-            for tr in table.find_all("tr"):
-                cells = [td.get_text(strip=True) for td in tr.find_all("td")]
-                if cells:
-                    rows.append(cells)
-            if rows or headers:
-                extracted_tables.append({"headers": headers, "rows": rows})
+        # Try UTF-8 first
+        try:
+            return raw_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            pass
 
-        # Clean text excerpt without excessive whitespace
-        text_content = soup.get_text(separator="\n", strip=True)
-        text_excerpt = "\n".join(
-            line for line in text_content.splitlines() if line.strip()
-        )[:3000]
+        # Fallback to charset_normalizer
+        try:
+            detected = charset_normalizer.from_bytes(raw_bytes).best()
+            if detected and detected.encoding:
+                return raw_bytes.decode(detected.encoding, errors="replace")
+        except Exception:
+            pass
 
-        return {
-            "title": title,
-            "extracted_tables": extracted_tables,
-            "text_excerpt": text_excerpt,
-        }
+        # Fallback to GB18030 / GBK for Chinese institutions
+        try:
+            return raw_bytes.decode("gb18030", errors="replace")
+        except Exception:
+            return raw_bytes.decode("utf-8", errors="replace")
 
     def acquire_source(self, source: SourceRecord) -> SourceAcquisitionSessionResult:
         """
@@ -175,7 +182,7 @@ class SourceAcquisitionExecutor:
         try:
             resp = self._execute_http_get(requested_url)
             status_code = getattr(resp, "status_code", 200)
-            final_url = getattr(resp, "url", requested_url) or requested_url
+            final_url = str(getattr(resp, "url", requested_url) or requested_url)
             headers = dict(getattr(resp, "headers", {}) or {})
             content_type = headers.get("Content-Type", headers.get("content-type", "text/html"))
 
@@ -185,7 +192,6 @@ class SourceAcquisitionExecutor:
 
             body_length = len(raw_bytes)
             response_hash = hashlib.sha256(raw_bytes).hexdigest()
-            html_text = getattr(resp, "text", "") or raw_bytes.decode("utf-8", errors="replace")
 
             if status_code >= 400:
                 technical_status = "failed"
@@ -194,13 +200,11 @@ class SourceAcquisitionExecutor:
                 technical_status = "success"
                 error_facts = None
 
-            # Persist raw evidence to disk
+            # Persist raw response for audit/debug
             source_evidence_dir = self.evidence_dir / source.source_id
             source_evidence_dir.mkdir(parents=True, exist_ok=True)
             raw_evidence_file = source_evidence_dir / f"{attempt_id}.html"
             raw_evidence_file.write_bytes(raw_bytes)
-
-            dom_data = self._extract_dom_structure(html_text)
 
             acq_res = AcquisitionResult(
                 attempt_id=attempt_id,
@@ -237,17 +241,30 @@ class SourceAcquisitionExecutor:
                 metadata=fact_metadata,
             )
 
-            agent_packet = {
-                "source_id": source.source_id,
-                "source_name": source.name,
-                "url": final_url,
-                "attempt_id": attempt_id,
-                "response_hash": response_hash,
-                "raw_evidence_path": str(raw_evidence_file),
-                "title": dom_data["title"],
-                "extracted_tables": dom_data["extracted_tables"],
-                "text_excerpt": dom_data["text_excerpt"],
-            }
+            # Only construct Agent content evidence for successful acquisitions
+            agent_packet = None
+            if technical_status == "success":
+                html_text = self._decode_html(raw_bytes, content_type)
+                parsed = self.html_parser.parse(html_text, base_url=final_url)
+                full_body = parsed.get("body_text", "")
+                is_truncated = len(full_body) > 3000
+                text_excerpt = full_body[:3000] if is_truncated else full_body
+
+                agent_packet = {
+                    "source_id": source.source_id,
+                    "source_name": source.name,
+                    "url": final_url,
+                    "attempt_id": attempt_id,
+                    "response_hash": response_hash,
+                    "raw_evidence_path": str(raw_evidence_file),
+                    "title": parsed.get("title", ""),
+                    "extracted_tables": parsed.get("tables", []),
+                    "headings": parsed.get("headings", []),
+                    "attachments": parsed.get("attachments", []),
+                    "text_excerpt": text_excerpt,
+                    "is_excerpt": is_truncated,
+                    "total_text_length": len(full_body),
+                }
 
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
@@ -292,19 +309,11 @@ def execute_production_acquisition(
     sources: List[SourceRecord],
     data_dir: Union[str, Path] = ".data",
     transport: Any = None,
-    manual_facts_override: Optional[List[MonitoringFact]] = None,
-    require_genuine_acquisition: bool = True,
 ) -> Dict[str, Any]:
     """
     Top-level production acquisition entrypoint.
-    Enforces that production monitoring facts must originate from genuine AcquisitionResult records.
+    Executes real acquisition for given sources, persists evidence, and derives monitoring facts.
     """
-    if require_genuine_acquisition and manual_facts_override is not None:
-        raise ValueError(
-            "Production acquisition proof requires valid AcquisitionResult generated by SourceAcquisitionExecutor; "
-            "manually supplied MonitoringFact objects are not valid production acquisition proof."
-        )
-
     executor = SourceAcquisitionExecutor(data_dir=data_dir, transport=transport)
     session_results: List[SourceAcquisitionSessionResult] = []
 
@@ -317,6 +326,6 @@ def execute_production_acquisition(
         "acquisition_results": [r.acquisition_result for r in session_results],
         "monitoring_facts": [r.monitoring_fact for r in session_results],
         "agent_evidence_packets": [
-            r.agent_evidence_packet for r in session_results if r.agent_evidence_packet
+            r.agent_evidence_packet for r in session_results if r.agent_evidence_packet is not None
         ],
     }
