@@ -3,10 +3,10 @@ Production Source Acquisition Executor for Career Radar.
 Respects CONTEXT.md, ADR-0002, Issue #19, Spec #20, Issue #21 and Issue #22.
 
 Establishes:
-1. AcquisitionResult audit contract (mechanically recorded, traceable, hash-addressable);
-2. SourceAcquisitionExecutor for deterministic HTTP acquisition & raw evidence persistence;
-3. Reuses HTMLAnnouncementParser for HTML structure and AttachmentParser for attachments;
-4. Decoupled stages: network transport -> response observation & raw persistence -> evidence parsing;
+1. Every physical HTTP request produces an AcquisitionResult (listing GET, detail GET, attachment GET);
+2. Multi-hop flow: Listing HTML -> deterministic detail selection -> Detail HTML -> Attachments -> Structured Packet;
+3. Mechanical, config-driven detail link selection (via SourceRecord metadata hints, no semantic job heuristics);
+4. Preserves raw listing, raw detail, and raw attachment evidence separately on disk;
 5. Downstream parsing errors never erase already-observed network acquisition facts;
 6. Failed technical acquisitions and parser failures are strictly excluded from Agent content evidence;
 7. Structural production entrypoint accepting only valid acquisition inputs.
@@ -23,6 +23,7 @@ import httpx
 
 from .acquisition_models import AcquisitionResult, SourceAcquisitionSessionResult
 from .attachment_helper import AttachmentAcquisitionHelper
+from .listing_helper import ListingAcquisitionHelper
 from .parser import AttachmentParser, HTMLAnnouncementParser
 from .sources import MonitoringFact, SourceRecord
 
@@ -101,19 +102,63 @@ class SourceAcquisitionExecutor:
             return raw_bytes.decode("utf-8", errors="replace")
 
     def acquire_source(self, source: SourceRecord) -> SourceAcquisitionSessionResult:
-        attempt_id = f"acq_{uuid.uuid4().hex[:12]}"
-        now_iso = datetime.now().isoformat()
-        requested_url = source.base_url
+        session_id = f"acq_{uuid.uuid4().hex[:12]}"
+        metadata = source.metadata or {}
+        is_listing_archetype = metadata.get("is_listing", False) or metadata.get("archetype") == "listing_html"
 
-        # Stage 1: Network Transport
-        try:
-            resp = self._execute_http_get(requested_url)
-        except Exception as transport_err:
-            acq_res = AcquisitionResult(
-                attempt_id=attempt_id,
+        if not is_listing_archetype:
+            return self._acquire_detail_and_attachments(
+                source=source,
+                detail_url=source.base_url,
+                session_id=session_id,
+                listing_result=None,
+            )
+
+        detail_url, listing_acq_res, monitoring_fact, raw_listing_path = ListingAcquisitionHelper.acquire_listing_page(
+            source=source,
+            session_id=session_id,
+            evidence_dir=self.evidence_dir,
+            http_getter=self._execute_http_get,
+            decode_html_fn=self._decode_html,
+            html_parser=self.html_parser,
+        )
+
+        if not detail_url or listing_acq_res.technical_status == "failed":
+            return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
-                requested_url=requested_url,
-                final_url=requested_url,
+                acquisition_result=listing_acq_res,
+                monitoring_fact=monitoring_fact,
+                raw_evidence_path=raw_listing_path,
+                agent_evidence_packet=None,
+                acquisition_results=[listing_acq_res],
+            )
+
+        return self._acquire_detail_and_attachments(
+            source=source,
+            detail_url=detail_url,
+            session_id=session_id,
+            listing_result=listing_acq_res,
+        )
+
+    def _acquire_detail_and_attachments(
+        self,
+        source: SourceRecord,
+        detail_url: str,
+        session_id: str,
+        listing_result: Optional[AcquisitionResult] = None,
+    ) -> SourceAcquisitionSessionResult:
+        now_iso = datetime.now().isoformat()
+        detail_attempt_id = f"{session_id}_detail" if listing_result else session_id
+        all_acq_results: List[AcquisitionResult] = [listing_result] if listing_result else []
+
+        try:
+            resp = self._execute_http_get(detail_url)
+        except Exception as detail_net_err:
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
+                source_id=source.source_id,
+                requested_url=detail_url,
+                final_url=detail_url,
                 timestamp=now_iso,
                 acquisition_method="native_http_get",
                 technical_status="failed",
@@ -122,42 +167,41 @@ class SourceAcquisitionExecutor:
                 body_length=0,
                 response_hash="",
                 error_facts={
-                    "error": str(transport_err),
-                    "exception_class": type(transport_err).__name__,
-                    "stage": "transport",
+                    "error": str(detail_net_err),
+                    "exception_class": type(detail_net_err).__name__,
+                    "stage": "detail_transport",
                 },
+                metadata={"request_type": "detail", "parent_attempt_id": listing_result.attempt_id if listing_result else None},
             )
+            all_acq_results.append(detail_acq_res)
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
                 technical_status="failed",
-                checked_url=requested_url,
+                checked_url=detail_url,
                 checked_at=now_iso,
-                metadata={"attempt_id": attempt_id, "error": str(transport_err)},
+                metadata={"attempt_id": detail_attempt_id, "error": str(detail_net_err)},
             )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
-                acquisition_result=acq_res,
+                acquisition_result=detail_acq_res,
                 monitoring_fact=monitoring_fact,
                 raw_evidence_path=None,
                 agent_evidence_packet=None,
+                acquisition_results=all_acq_results,
             )
 
-        # Stage 2: Response Observation & Raw Evidence Persistence
         status_code = getattr(resp, "status_code", 200)
-        final_url = str(getattr(resp, "url", requested_url) or requested_url)
+        final_url = str(getattr(resp, "url", detail_url) or detail_url)
         headers = dict(getattr(resp, "headers", {}) or {})
         content_type = headers.get("Content-Type", headers.get("content-type", "text/html"))
 
-        raw_bytes = getattr(resp, "content", b"")
-        if not raw_bytes and hasattr(resp, "text"):
-            raw_bytes = resp.text.encode("utf-8")
-
+        raw_bytes = getattr(resp, "content", b"") or (resp.text.encode("utf-8") if hasattr(resp, "text") else b"")
         body_length = len(raw_bytes)
         response_hash = hashlib.sha256(raw_bytes).hexdigest()
 
         source_evidence_dir = self.evidence_dir / source.source_id
         source_evidence_dir.mkdir(parents=True, exist_ok=True)
-        raw_evidence_file = source_evidence_dir / f"{attempt_id}.html"
+        raw_evidence_file = source_evidence_dir / f"{detail_attempt_id}.html"
         raw_evidence_file.write_bytes(raw_bytes)
         raw_evidence_path = str(raw_evidence_file)
 
@@ -165,46 +209,40 @@ class SourceAcquisitionExecutor:
         last_modified = headers.get("Last-Modified") or headers.get("last-modified")
 
         if status_code >= 400:
-            technical_status = "failed"
-            error_facts = {"http_status": status_code, "error": f"HTTP {status_code}"}
-            acq_res = AcquisitionResult(
-                attempt_id=attempt_id,
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
                 source_id=source.source_id,
-                requested_url=requested_url,
+                requested_url=detail_url,
                 final_url=final_url,
                 timestamp=now_iso,
                 acquisition_method="native_http_get",
-                technical_status=technical_status,
+                technical_status="failed",
                 http_status=status_code,
                 content_type=content_type,
                 body_length=body_length,
                 response_hash=response_hash,
-                error_facts=error_facts,
+                error_facts={"http_status": status_code, "error": f"HTTP {status_code}"},
                 etag=etag,
                 last_modified=last_modified,
+                metadata={"request_type": "detail", "raw_evidence_path": raw_evidence_path},
             )
+            all_acq_results.append(detail_acq_res)
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
-                technical_status=technical_status,
+                technical_status="failed",
                 checked_url=final_url,
                 checked_at=now_iso,
-                metadata={
-                    "attempt_id": attempt_id,
-                    "response_hash": response_hash,
-                    "body_length": body_length,
-                    "http_status": status_code,
-                    "error": f"HTTP {status_code}",
-                },
+                metadata={"attempt_id": detail_attempt_id, "response_hash": response_hash, "http_status": status_code},
             )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
-                acquisition_result=acq_res,
+                acquisition_result=detail_acq_res,
                 monitoring_fact=monitoring_fact,
                 raw_evidence_path=raw_evidence_path,
                 agent_evidence_packet=None,
+                acquisition_results=all_acq_results,
             )
 
-        # Stage 3: Evidence Parsing & Discovered Attachment Acquisition (for HTTP 2xx)
         try:
             html_text = self._decode_html(raw_bytes, content_type)
             parsed = self.html_parser.parse(html_text, base_url=final_url)
@@ -218,21 +256,24 @@ class SourceAcquisitionExecutor:
                 parsed_attachment_tables,
                 parsed_attachment_pages,
                 attachment_audit_facts,
+                attachment_acq_results,
             ) = self.attachment_helper.acquire_and_parse(
                 attachments_meta=discovered_attachments,
                 source_id=source.source_id,
-                attempt_id=attempt_id,
+                attempt_id=detail_attempt_id,
                 base_url=final_url,
                 http_getter=self._execute_http_get,
+                parent_attempt_id=detail_attempt_id,
             )
 
+            all_acq_results.extend(attachment_acq_results)
             combined_tables = list(parsed.get("tables", [])) + parsed_attachment_tables
 
             agent_packet = {
                 "source_id": source.source_id,
                 "source_name": source.name,
                 "url": final_url,
-                "attempt_id": attempt_id,
+                "attempt_id": detail_attempt_id,
                 "response_hash": response_hash,
                 "raw_evidence_path": raw_evidence_path,
                 "title": parsed.get("title", ""),
@@ -248,10 +289,10 @@ class SourceAcquisitionExecutor:
                 "total_text_length": len(full_body),
             }
 
-            acq_res = AcquisitionResult(
-                attempt_id=attempt_id,
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
                 source_id=source.source_id,
-                requested_url=requested_url,
+                requested_url=detail_url,
                 final_url=final_url,
                 timestamp=now_iso,
                 acquisition_method="native_http_get",
@@ -264,18 +305,26 @@ class SourceAcquisitionExecutor:
                 etag=etag,
                 last_modified=last_modified,
                 metadata={
+                    "request_type": "detail",
+                    "raw_evidence_path": raw_evidence_path,
                     "attachments_found_count": len(discovered_attachments),
                     "attachments_acquired_count": len([r for r in attachment_reports if r.get("status") == "success"]),
                     "attachment_audits": attachment_audit_facts,
+                    "physical_requests_count": len(all_acq_results) + 1,
                 },
             )
+            if listing_result:
+                all_acq_results.insert(1, detail_acq_res)
+            else:
+                all_acq_results.insert(0, detail_acq_res)
+
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
                 technical_status="success",
                 checked_url=final_url,
                 checked_at=now_iso,
                 metadata={
-                    "attempt_id": attempt_id,
+                    "attempt_id": detail_attempt_id,
                     "response_hash": response_hash,
                     "body_length": body_length,
                     "http_status": status_code,
@@ -284,22 +333,18 @@ class SourceAcquisitionExecutor:
             )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
-                acquisition_result=acq_res,
+                acquisition_result=detail_acq_res,
                 monitoring_fact=monitoring_fact,
                 raw_evidence_path=raw_evidence_path,
                 agent_evidence_packet=agent_packet,
+                acquisition_results=all_acq_results,
             )
 
         except Exception as parse_err:
-            parse_error_facts = {
-                "parse_error": str(parse_err),
-                "exception_class": type(parse_err).__name__,
-                "stage": "evidence_parsing",
-            }
-            acq_res = AcquisitionResult(
-                attempt_id=attempt_id,
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
                 source_id=source.source_id,
-                requested_url=requested_url,
+                requested_url=detail_url,
                 final_url=final_url,
                 timestamp=now_iso,
                 acquisition_method="native_http_get",
@@ -308,18 +353,23 @@ class SourceAcquisitionExecutor:
                 content_type=content_type,
                 body_length=body_length,
                 response_hash=response_hash,
-                error_facts=parse_error_facts,
+                error_facts={"parse_error": str(parse_err), "stage": "evidence_parsing"},
                 etag=etag,
                 last_modified=last_modified,
-                metadata={"evidence_parsing_status": "failed"},
+                metadata={"request_type": "detail", "evidence_parsing_status": "failed", "raw_evidence_path": raw_evidence_path},
             )
+            if listing_result:
+                all_acq_results.insert(1, detail_acq_res)
+            else:
+                all_acq_results.insert(0, detail_acq_res)
+
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
                 technical_status="failed",
                 checked_url=final_url,
                 checked_at=now_iso,
                 metadata={
-                    "attempt_id": attempt_id,
+                    "attempt_id": detail_attempt_id,
                     "response_hash": response_hash,
                     "body_length": body_length,
                     "http_status": status_code,
@@ -328,10 +378,11 @@ class SourceAcquisitionExecutor:
             )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
-                acquisition_result=acq_res,
+                acquisition_result=detail_acq_res,
                 monitoring_fact=monitoring_fact,
                 raw_evidence_path=raw_evidence_path,
                 agent_evidence_packet=None,
+                acquisition_results=all_acq_results,
             )
 
 
@@ -340,20 +391,18 @@ def execute_production_acquisition(
     data_dir: Union[str, Path] = ".data",
     transport: Any = None,
 ) -> Dict[str, Any]:
-    """
-    Top-level production acquisition entrypoint.
-    Executes real acquisition for given sources, persists evidence, and derives monitoring facts.
-    """
     executor = SourceAcquisitionExecutor(data_dir=data_dir, transport=transport)
     session_results: List[SourceAcquisitionSessionResult] = []
+    all_acquisition_results: List[AcquisitionResult] = []
 
     for src in sources:
         res = executor.acquire_source(src)
         session_results.append(res)
+        all_acquisition_results.extend(res.acquisition_results)
 
     return {
         "session_results": session_results,
-        "acquisition_results": [r.acquisition_result for r in session_results],
+        "acquisition_results": all_acquisition_results,
         "monitoring_facts": [r.monitoring_fact for r in session_results],
         "agent_evidence_packets": [
             r.agent_evidence_packet for r in session_results if r.agent_evidence_packet is not None

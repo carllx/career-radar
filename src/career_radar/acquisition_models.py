@@ -3,8 +3,8 @@ Production Source Acquisition Models & Contracts for Career Radar.
 Respects CONTEXT.md, ADR-0002, Issue #19, Spec #20, Issue #21 and Issue #22.
 """
 
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional
 
 from .sources import MonitoringFact
 
@@ -13,6 +13,7 @@ from .sources import MonitoringFact
 class AcquisitionResult:
     """
     Auditable mechanical acquisition record produced by actual network retrieval.
+    Every physical HTTP request (listing GET, detail GET, attachment GET) produces one AcquisitionResult.
     """
     attempt_id: str
     source_id: str
@@ -57,19 +58,25 @@ class AcquisitionResult:
 @dataclass
 class SourceAcquisitionSessionResult:
     """
-    Vertical result combining mechanical audit record, derived monitoring fact,
-    persisted raw evidence path, and compact Agent-facing structured packet.
+    Vertical result combining primary audit record, all physical HTTP acquisition records,
+    derived monitoring fact, persisted raw evidence path, and compact Agent-facing structured packet.
     """
     source_id: str
     acquisition_result: AcquisitionResult
     monitoring_fact: MonitoringFact
     raw_evidence_path: Optional[str] = None
     agent_evidence_packet: Optional[Dict[str, Any]] = None
+    acquisition_results: List[AcquisitionResult] = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.acquisition_results and self.acquisition_result:
+            self.acquisition_results = [self.acquisition_result]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "source_id": self.source_id,
             "acquisition_result": self.acquisition_result.to_dict(),
+            "acquisition_results": [r.to_dict() for r in self.acquisition_results],
             "monitoring_fact": asdict(self.monitoring_fact),
             "raw_evidence_path": self.raw_evidence_path,
             "agent_evidence_packet": self.agent_evidence_packet,
