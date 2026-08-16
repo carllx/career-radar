@@ -1,19 +1,92 @@
-# Career Radar - Candidate Profile Example Template (Public / Desensitized)
+# Career Radar - Candidate Profile v2 Example Template (Public / Desensitized)
 candidate:
+  # Basic candidate identity & dynamic age (date_of_birth is preferred; age is fallback)
+  date_of_birth: "YYYY-MM-DD"
   age: 30
   degree: "master"
-  degree_field: "Computer Science & Digital Media"
+  degree_field: "Example Discipline & Field"
   teaching_experience_years: 3
   industry_experience_years: 4
+
+  # Three-tier capability evidence structure
+  proven_capabilities:
+    - "Example Core Skill A"
+    - "Example Core Skill B"
+  adjacent_capabilities:
+    - "Example Adjacent Tech C"
+    - "Example Adjacent Tech D"
+  learning_targets:
+    - "Example Learning Target E"
+    - "Example Learning Target F"
+
+  # Canonical career tracks with Priority and Default Intent
   tracks:
     - name: "higher_education_teaching"
       priority: 1
+      default_intent: "APPLY_NOW"
+      notes: "Public & private undergraduate higher-education teaching"
     - name: "vocational_education"
+      priority: 1
+      default_intent: "APPLY_NOW"
+      notes: "Higher vocational colleges & vocational universities"
+    - name: "art_tech_creative_technology"
       priority: 2
+      default_intent: "APPLY_NOW"
+      notes: "Interactive installations, museum digital exhibitions, XR"
+    - name: "open_cross_disciplinary_discovery"
+      priority: 2
+      default_intent: "CONDITIONAL"
+      notes: "Cross-disciplinary roles combining art + technology + 3D + interaction"
+    - name: "game_3d_production"
+      priority: 3
+      default_intent: "CONDITIONAL"
+      notes: "Game 3D art & sculpting when compensation, autonomy or creative seniority is strong"
+    - name: "ai_content_planning"
+      priority: 3
+      default_intent: "CONDITIONAL"
+      notes: "Creative direction & AI content coordination (non-repetitive execution)"
+    - name: "ai_video_market_intelligence"
+      priority: 4
+      default_intent: "WATCH_LEARN"
+      notes: "Capture market demand, client briefs, and workflow trends"
+
+  # Preferences (Preferences are NOT Eligibility blockers)
+  benefit_preferences:
+    social_insurance: "strong"
+    medical_insurance: "strong"
+    stability: "strong"
+    time_autonomy: "strong"
+
+  engagement_preferences:
+    full_time_teaching: "preferred"
+    adjunct_teaching: "acceptable_if_no_conflict"
+    project_contract: "conditional_on_track"
+    industry_employment: "conditional_on_terms"
+    market_intelligence_capture: "always_capture"
+
+  compensation_preferences:
+    teaching_net_monthly_reference: "EXAMPLE_MONTHLY_NET"
+    enterprise_monthly_expectation: "UNSPECIFIED"
+    evaluation_mode: "holistic_tradeoff"
+
+  # Geographic preference scope
   regions:
-    p1: ["Guangzhou"]
-    p2: ["Foshan", "Dongguan"]
-    p3: ["Greater Bay Area"]
+    p1: ["Example City A"]
+    p2: ["Example City B", "Example City C"]
+    p3: ["Example Region D"]
+
+  # Availability & schedule constraints
+  availability_constraints:
+    - name: "Example Schedule Commitment"
+      period: "YYYY-MM"
+      duration_weeks: "EXAMPLE_WEEKS"
+      schedule_details: "UNKNOWN"
+      conflict_rule: "DO_NOT_ASSUME_CONFLICT_UNTIL_SCHEDULED"
+
+  # Unresolved candidate facts (pending human confirmation, not treated as ground truth)
+  unresolved_facts:
+    example_disputed_fact: "NEEDS_USER_CONFIRMATION"
+
+  # Legacy compatibility data (only for backwards compatibility parsing; no deterministic filtering)
   hard_constraints:
-    min_degree: "master"
-    max_age: 35
+    legacy_compatibility_only: true

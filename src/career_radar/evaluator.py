@@ -41,16 +41,26 @@ def build_evaluation_packet(
 ) -> Dict[str, Any]:
     """
     Assembles a clean, structured evidence packet for an Agent to evaluate.
+    Exposes full Profile v2 candidate evidence with explicit capability layers.
     """
     return {
         "candidate_evidence": {
+            "date_of_birth": profile.date_of_birth,
             "age": profile.age,
             "degree": profile.degree,
             "degree_field": profile.degree_field,
             "teaching_experience_years": profile.teaching_experience_years,
             "industry_experience_years": profile.industry_experience_years,
+            "proven_capabilities": profile.proven_capabilities,
+            "adjacent_capabilities": profile.adjacent_capabilities,
+            "learning_targets": profile.learning_targets,
             "tracks": profile.tracks,
+            "benefit_preferences": profile.benefit_preferences,
+            "engagement_preferences": profile.engagement_preferences,
+            "compensation_preferences": profile.compensation_preferences,
             "regions": profile.regions,
+            "availability_constraints": profile.availability_constraints,
+            "unresolved_facts": profile.unresolved_facts,
             "hard_constraints": profile.hard_constraints,
         },
         "observation_evidence": {
@@ -65,6 +75,7 @@ def build_evaluation_packet(
             "dimensions": CANONICAL_DIMENSIONS,
             "evidence_states": list(VALID_EVIDENCE_STATES),
             "recommendations": list(VALID_RECOMMENDATIONS),
+            "learning_targets_rule": "Learning targets indicate exploring/learning skills and must NOT mechanically imply Capability Fit: PASS",
         },
     }
 

@@ -13,13 +13,19 @@
 基于用户偏好设定的情报检索边界（`IN_SCOPE` / `OUT_OF_SCOPE`）。`OUT_OF_SCOPE` 仅表示 Career Radar 不主动跟进与汇报该机会，与候选人是否具备资格无关。
 
 ### Preference（用户偏好）
-用于指导情报路由与呈现排名的非资格属性，包括 `Track Priority` 与 `Location Priority`。
+用于指导情报路由、排序与行动倾向的非资格属性。涵盖赛道优先级（`Track Priority`）、地域层级（`Location Priority`）、现实保障（`Benefit Preferences`：社保医保、稳定性、时间自主权）、雇佣形态（`Engagement Preferences`）与弹性薪酬考量（`Compensation Preferences`）。偏好考量绝不作为法定资格准入的阻断项。
 
 ### Track Priority（赛道优先级）
-业务关注赛道划分，用于日报分组与通知提权（如 `P1 高校与职校教学`、`P2 游戏与数字创意产业`），不单独作为资格阻断项。
+业务关注赛道的战略分组与呈现层级（如 `1`、`2`、`3`、`4`），独立于法定资格准入（Eligibility）。
 
 ### Location Priority（地域优先级）
 工作地点匹配层级（`P1 广州`、`P2 广佛莞周边`、`P3 大湾区其他`），用于呈现排序与关注度标记。
+
+### Availability Constraint（排期约束）
+候选人已知的时间排期与外聘/项目承诺约束。在排课或日程细节不明确（`UNKNOWN`）前，严禁主观推断为时间冲突。
+
+### Unresolved Candidate Fact（待确认事实）
+候选人背景中处于存疑或待核实状态的事实（如标记为 `NEEDS_USER_CONFIRMATION`），系统将其视为未决事项，不作为确凿事实推演。
 
 ---
 
@@ -29,7 +35,16 @@
 来自招聘方第一方官方公告、岗位附件表格或法定发布系统的文本片段与具体条件凭证。
 
 ### Candidate Evidence（候选人背景证据）
-来自用户私有本地配置的真实资质事实凭证（如学历、工作年限、实战技能）。
+来自用户私有画像配置（`Candidate Profile`）的真实事实与多层能力凭证。
+
+### Proven Capability（已证明核心能力）
+具备充分实践成果、历史岗位经历或真实项目/教学凭证支持的既有能力。
+
+### Adjacent Capability（邻近迁移技能）
+具备底层技术或方法论相近性、可在具体场景中迁移应用但需结合上下文研判的拓展技能。
+
+### Learning Target（学习探索目标）
+候选人当前正在探索、学习或构建的技能方向。在语义评定中，**学习目标严禁自动视为能力契合的 `PASS` 证据**。
 
 ### Evidence State（证据状态）
 Agent 对某个适用维度进行语义推演后的证据状态评价，包含五个 canonical states：
@@ -42,13 +57,13 @@ Agent 对某个适用维度进行语义推演后的证据状态评价，包含�
 具体判断与聚合规则参见 [`docs/adr/0001-agent-driven-discrete-matching-protocol.md`](docs/adr/0001-agent-driven-discrete-matching-protocol.md)。
 
 ### Eligibility（资格合规性）
-候选人与岗位法定准入条件的符合程度（涵盖 `Age`、`Education`、`Formal Qualification` 等）。
-
-### Formal Qualification（正式专业资格）
-依据招聘公告指定的正式专业目录、专业代码或学科分类标准所界定的法定专业准入门槛。
-
-### Capability Fit（能力与课程契合度）
-候选人实际掌握的专业能力、技术栈与教学经验，与岗位所要求的课程讲授能力或岗位职责的实际契合程度。
+候选人与岗位法定准入条件的符合程度，严格限定在以下 6 个标准维度：
+1. `Age`（年龄上限与基准日）
+2. `Education`（学历与学位层次）
+3. `Formal Qualification`（法定学科专业代码与从业资质）
+4. `Capability Fit`（实际能力与课程契合度）
+5. `Teaching Experience`（任教经历与年限）
+6. `Industry Experience`（行业与工程实战经历）
 
 ### Hard Blocker（硬性门槛阻断）
 在具备充分第一方证据的前提下，某一硬性维度求值为 `FAIL` 时的全局熔断状态，导致该岗位直接判定为 `明显不符合`。
@@ -86,11 +101,10 @@ Agent 综合各维度证据状态输出的最终三态决策，包含三个 cano
 ## 运行与交付 (Runtime & Delivery)
 
 ### Candidate Profile（候选人画像）
-用户的私密背景信息（含学历、专业、地域赛道偏好与论文成果），本地存放在被 `.gitignore` 保护的 `profile.local.yaml`，仓库仅保留脱敏模板 `profile.example.yaml`。
+用户的全景私密背景与多轨职业偏好配置（含出生日期/年龄、三层能力分级、标准赛道配置、现实偏好与排期约束）。本地存放在被 `.gitignore` 保护的 `profile.local.yaml`，公开仓库仅保留通用脱敏模板 `config/profile.example.yaml`。
 
 ### Daily Digest Report（每日机会简报）
-Agent 运行完成后生成的结构化 Markdown 报告（保存在 `reports/YYYY-MM-DD.md`），高信噪比呈现高价值新增机会、重要岗位动态变更、存疑待确认项及渠道网络变动。
+Agent 运行完成后生成的结构化 Markdown 报告（保存在 `reports/YYYY-MM-DD.md`），高信噪比呈现高价值新增机会、重点岗位动态变更、存疑待确认项及渠道网络变动。
 
 ### Local Data Cache（本地数据持久化）
 本地被忽略的 `.data/` 目录，存放 Opportunity 历史库（`opportunities.jsonl`）、渠道元数据（`sources.json`）及原始公告抓取缓存。
-

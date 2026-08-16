@@ -17,20 +17,65 @@ CANONICAL_DIMENSIONS = [
     "Industry Experience",
 ]
 
+CANONICAL_TRACKS = [
+    "higher_education_teaching",
+    "vocational_education",
+    "art_tech_creative_technology",
+    "open_cross_disciplinary_discovery",
+    "game_3d_production",
+    "ai_content_planning",
+    "ai_video_market_intelligence",
+]
+
 VALID_EVIDENCE_STATES = {"PASS", "REVIEW", "FAIL", "UNKNOWN", "N/A"}
 VALID_RECOMMENDATIONS = {"建议关注", "需要人工确认", "明显不符合"}
 VALID_RESOLUTION_OUTCOMES = {"same", "update", "different", "uncertain"}
 
 
+def calculate_chronological_age(
+    date_of_birth: Optional[str], reference_date: Optional[str]
+) -> Optional[int]:
+    """
+    Mechanically calculates chronological age when BOTH candidate DOB and an
+    already-established reference/cutoff date are supplied (e.g. 'YYYY-MM-DD').
+
+    Strict Boundary:
+    Deterministic code ONLY performs chronological difference calculation.
+    Interpreting which announcement date is the legal reference date, interpreting
+    relaxation clauses, and deciding final Age dimension states remain Agent
+    semantic responsibilities.
+    """
+    if not date_of_birth or not reference_date:
+        return None
+    try:
+        dob = datetime.strptime(str(date_of_birth)[:10], "%Y-%m-%d").date()
+        ref = datetime.strptime(str(reference_date)[:10], "%Y-%m-%d").date()
+        years = ref.year - dob.year
+        if (ref.month, ref.day) < (dob.month, dob.day):
+            years -= 1
+        return max(0, years)
+    except (ValueError, TypeError):
+        return None
+
+
 @dataclass
 class CandidateProfile:
-    age: int
-    degree: str
-    degree_field: str
+    age: int = 0
+    degree: str = ""
+    degree_field: str = ""
+    date_of_birth: Optional[str] = None
     teaching_experience_years: int = 0
     industry_experience_years: int = 0
+    proven_capabilities: List[str] = field(default_factory=list)
+    adjacent_capabilities: List[str] = field(default_factory=list)
+    learning_targets: List[str] = field(default_factory=list)
     tracks: List[Dict[str, Any]] = field(default_factory=list)
+    benefit_preferences: Dict[str, Any] = field(default_factory=dict)
+    engagement_preferences: Dict[str, Any] = field(default_factory=dict)
+    compensation_preferences: Dict[str, Any] = field(default_factory=dict)
     regions: Dict[str, List[str]] = field(default_factory=dict)
+    availability_constraints: List[Dict[str, Any]] = field(default_factory=list)
+    unresolved_facts: Dict[str, Any] = field(default_factory=dict)
     hard_constraints: Dict[str, Any] = field(default_factory=dict)
 
     def track_names(self) -> Set[str]:
@@ -47,15 +92,55 @@ class CandidateProfile:
     def from_dict(cls, data: Dict[str, Any]) -> "CandidateProfile":
         cand = data.get("candidate", data)
         return cls(
+            date_of_birth=cand.get("date_of_birth"),
             age=cand.get("age", 0),
             degree=cand.get("degree", ""),
             degree_field=cand.get("degree_field", ""),
             teaching_experience_years=cand.get("teaching_experience_years", 0),
             industry_experience_years=cand.get("industry_experience_years", 0),
+            proven_capabilities=cand.get("proven_capabilities", []),
+            adjacent_capabilities=cand.get("adjacent_capabilities", []),
+            learning_targets=cand.get("learning_targets", []),
             tracks=cand.get("tracks", []),
+            benefit_preferences=cand.get("benefit_preferences", {}),
+            engagement_preferences=cand.get("engagement_preferences", {}),
+            compensation_preferences=cand.get("compensation_preferences", {}),
             regions=cand.get("regions", {}),
+            availability_constraints=cand.get("availability_constraints", []),
+            unresolved_facts=cand.get("unresolved_facts", {}),
             hard_constraints=cand.get("hard_constraints", {}),
         )
+
+    def to_dict(self) -> Dict[str, Any]:
+        res: Dict[str, Any] = {
+            "age": self.age,
+            "degree": self.degree,
+            "degree_field": self.degree_field,
+            "teaching_experience_years": self.teaching_experience_years,
+            "industry_experience_years": self.industry_experience_years,
+            "tracks": self.tracks,
+            "regions": self.regions,
+            "hard_constraints": self.hard_constraints,
+        }
+        if self.date_of_birth is not None:
+            res["date_of_birth"] = self.date_of_birth
+        if self.proven_capabilities:
+            res["proven_capabilities"] = self.proven_capabilities
+        if self.adjacent_capabilities:
+            res["adjacent_capabilities"] = self.adjacent_capabilities
+        if self.learning_targets:
+            res["learning_targets"] = self.learning_targets
+        if self.benefit_preferences:
+            res["benefit_preferences"] = self.benefit_preferences
+        if self.engagement_preferences:
+            res["engagement_preferences"] = self.engagement_preferences
+        if self.compensation_preferences:
+            res["compensation_preferences"] = self.compensation_preferences
+        if self.availability_constraints:
+            res["availability_constraints"] = self.availability_constraints
+        if self.unresolved_facts:
+            res["unresolved_facts"] = self.unresolved_facts
+        return res
 
 
 @dataclass

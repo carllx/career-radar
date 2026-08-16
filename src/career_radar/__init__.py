@@ -3,12 +3,14 @@ Career Radar - Autonomous career intelligence and recruitment tracking system.
 """
 
 from .models import (
+    CANONICAL_TRACKS,
     CandidateProfile,
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
     SourceObservation,
+    calculate_chronological_age,
 )
 from .orchestrator import RadarOrchestrator, RadarRunOutcome
 from .resolver import EntityResolutionApplier
@@ -20,12 +22,14 @@ from .store import OpportunityStore
 __version__ = "0.1.0"
 
 __all__ = [
+    "CANONICAL_TRACKS",
     "CandidateProfile",
     "DimensionEvaluation",
     "EntityResolutionDecision",
     "EvaluationResult",
     "Opportunity",
     "SourceObservation",
+    "calculate_chronological_age",
     "RadarOrchestrator",
     "RadarRunOutcome",
     "EntityResolutionApplier",
