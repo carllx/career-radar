@@ -17,6 +17,7 @@ from career_radar.models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.runner import (
@@ -360,6 +361,7 @@ def test_update_digest_links_latest_update_evidence_url(
         observations=[update_obs],
         resolution_decisions=[update_decision],
         evaluation_results={"obs_extension_link_002": re_eval},
+        intent_decisions={"obs_extension_link_002": OpportunityIntentDecision(opportunity_intent="APPLY_NOW", intent_rationale="延期更新后保持即刻行动")},
         data_dir=data_dir,
         reports_dir=reports_dir,
         run_date="2026-08-15",

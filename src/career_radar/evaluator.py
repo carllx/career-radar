@@ -145,16 +145,38 @@ def build_intent_packet(
     Assembles a clean, structured evidence packet for an Agent to decide Opportunity Intent.
     Exposes candidate preferences, track default_intent prior, opportunity conditions,
     and eligibility evaluation context.
+    Safely handles both Profile v1 string tracks and Profile v2 dict tracks.
     """
-    matching_track = next(
-        (t for t in profile.tracks if t.get("name") == observation.track),
+    matching_track_raw = next(
+        (
+            t
+            for t in profile.tracks
+            if (
+                t == observation.track
+                if isinstance(t, str)
+                else isinstance(t, dict) and t.get("name") == observation.track
+            )
+        ),
         None,
     )
+    if isinstance(matching_track_raw, str):
+        matching_track: Optional[Dict[str, Any]] = {"name": matching_track_raw}
+        track_priority = None
+        track_default_intent = None
+    elif isinstance(matching_track_raw, dict):
+        matching_track = matching_track_raw
+        track_priority = matching_track.get("priority")
+        track_default_intent = matching_track.get("default_intent")
+    else:
+        matching_track = None
+        track_priority = None
+        track_default_intent = None
+
     return {
         "candidate_evidence": {
             "matching_track": matching_track,
-            "track_priority": matching_track.get("priority") if matching_track else None,
-            "track_default_intent": matching_track.get("default_intent") if matching_track else None,
+            "track_priority": track_priority,
+            "track_default_intent": track_default_intent,
             "benefit_preferences": profile.benefit_preferences,
             "engagement_preferences": profile.engagement_preferences,
             "compensation_preferences": profile.compensation_preferences,
@@ -198,14 +220,20 @@ def build_intent_packet(
 class IntentValidator:
     """
     Deterministic layer: validates opportunity intent state integrity
-    without embedding business heuristics.
+    and presence of intent rationale without embedding business heuristics.
     """
 
     @staticmethod
     def validate(decision: OpportunityIntentDecision) -> OpportunityIntentDecision:
+        if not isinstance(decision, OpportunityIntentDecision):
+            raise ValueError(f"Expected OpportunityIntentDecision instance, got {type(decision)}")
         if decision.opportunity_intent not in VALID_OPPORTUNITY_INTENTS:
             raise ValueError(
                 f"Invalid opportunity intent '{decision.opportunity_intent}'. "
                 f"Must be one of {VALID_OPPORTUNITY_INTENTS}"
+            )
+        if not isinstance(decision.intent_rationale, str) or not decision.intent_rationale.strip():
+            raise ValueError(
+                "Missing or blank intent_rationale. Opportunity Intent requires a non-empty rationale string."
             )
         return decision

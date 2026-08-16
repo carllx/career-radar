@@ -118,9 +118,21 @@ class DigestReporter:
             for opp in updated_posts:
                 update_desc = opp.update_summary or "状态更新"
                 update_url = (opp.change_diff or {}).get("latest_official_url") or opp.official_url
-                lines.append(
-                    f"- **{opp.organization}** · [{opp.canonical_job_title}]({update_url})：{update_desc}"
-                )
+                lines.append(f"### [{opp.canonical_job_title}]({update_url})")
+                lines.append(f"- **用人单位**：{opp.organization}")
+                lines.append(f"- **变更摘要**：{update_desc}")
+                if opp.latest_evaluation:
+                    lines.append(f"- **最新资格结论**：`{opp.latest_evaluation.final_recommendation}`")
+                if opp.opportunity_intent:
+                    intent_cn = {
+                        "APPLY_NOW": "即刻行动",
+                        "CONDITIONAL": "条件关注",
+                        "WATCH_LEARN": "情报观测",
+                    }.get(opp.opportunity_intent, opp.opportunity_intent)
+                    lines.append(f"- **最新行动意图**：`{opp.opportunity_intent} / {intent_cn}`")
+                if opp.intent_rationale:
+                    lines.append(f"- **意图理由**：{opp.intent_rationale}")
+                lines.append("")
 
         lines.extend([
             "",

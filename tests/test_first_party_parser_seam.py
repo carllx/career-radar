@@ -14,6 +14,7 @@ from career_radar.models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.parser import AttachmentParser, HTMLAnnouncementParser
@@ -313,10 +314,19 @@ def test_first_party_announcement_to_daily_digest_seam(
         for _ in observations
     ]
 
+    intent_map = {
+        obs.observation_id: OpportunityIntentDecision(
+            opportunity_intent="APPLY_NOW" if "PASS" in str(ev.final_recommendation) or "建议关注" in str(ev.final_recommendation) else "WATCH_LEARN",
+            intent_rationale="Synthetic first-party test intent rationale",
+        )
+        for obs, ev in zip(observations, decisions)
+    }
+
     summary = finalize_incremental_run(
         observations=observations,
         resolution_decisions=resolution_decisions,
         evaluation_results=decisions_map,
+        intent_decisions=intent_map,
         data_dir=tmp_path / ".data",
         reports_dir=tmp_path / "reports",
         run_date="2026-08-15",

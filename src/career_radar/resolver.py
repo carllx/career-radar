@@ -101,6 +101,10 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'update' requires a valid re-evaluated EvaluationResult for observation '{observation.observation_id}'. Placeholder evaluation is strictly prohibited."
                 )
+            if not intent_decision:
+                raise ValueError(
+                    f"EntityResolution 'update' requires a valid re-evaluated OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
+                )
 
             target_opp = opportunities_map[target_id]
             target_opp.observations.append(observation)
@@ -113,9 +117,8 @@ class EntityResolutionApplier:
                 "updated_at": current_time,
             }
             target_opp.latest_evaluation = evaluation_result
-            if intent_decision:
-                target_opp.opportunity_intent = intent_decision.opportunity_intent
-                target_opp.intent_rationale = intent_decision.intent_rationale
+            target_opp.opportunity_intent = intent_decision.opportunity_intent
+            target_opp.intent_rationale = intent_decision.intent_rationale
             target_opp.updated_at = current_time
             return target_opp, "updated_opportunity"
 
@@ -123,6 +126,10 @@ class EntityResolutionApplier:
             if not evaluation_result:
                 raise ValueError(
                     f"EntityResolution 'different' requires a valid EvaluationResult for observation '{observation.observation_id}'. Placeholder evaluation is strictly prohibited."
+                )
+            if not intent_decision:
+                raise ValueError(
+                    f"EntityResolution 'different' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
 
             new_opp_id = f"opp_{observation.observation_id}"
@@ -138,8 +145,8 @@ class EntityResolutionApplier:
                 latest_evaluation=evaluation_result,
                 created_at=observation.observed_at or current_time,
                 updated_at=observation.observed_at or current_time,
-                opportunity_intent=intent_decision.opportunity_intent if intent_decision else None,
-                intent_rationale=intent_decision.intent_rationale if intent_decision else None,
+                opportunity_intent=intent_decision.opportunity_intent,
+                intent_rationale=intent_decision.intent_rationale,
             )
             opportunities_map[new_opp_id] = new_opp
             return new_opp, "new_different"
@@ -153,6 +160,10 @@ class EntityResolutionApplier:
             if not evaluation_result:
                 raise ValueError(
                     f"EntityResolution 'uncertain' requires a valid EvaluationResult for observation '{observation.observation_id}'. Placeholder evaluation is strictly prohibited."
+                )
+            if not intent_decision:
+                raise ValueError(
+                    f"EntityResolution 'uncertain' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
 
             new_opp_id = f"opp_{observation.observation_id}"
@@ -169,8 +180,8 @@ class EntityResolutionApplier:
                 created_at=observation.observed_at or current_time,
                 updated_at=observation.observed_at or current_time,
                 uncertain_links=[target_id],
-                opportunity_intent=intent_decision.opportunity_intent if intent_decision else None,
-                intent_rationale=intent_decision.intent_rationale if intent_decision else None,
+                opportunity_intent=intent_decision.opportunity_intent,
+                intent_rationale=intent_decision.intent_rationale,
             )
             opportunities_map[new_opp_id] = new_opp
 

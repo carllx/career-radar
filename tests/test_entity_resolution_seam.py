@@ -14,6 +14,7 @@ from career_radar.models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.resolver import build_entity_resolution_packet
@@ -262,10 +263,17 @@ def test_entity_resolution_slice_b_update(tmp_path: Path, mock_profile_file: Pat
             evaluated_at=now,
         )
 
+    def fake_intent_evaluator(profile, obs, ev):
+        return OpportunityIntentDecision(
+            opportunity_intent="APPLY_NOW",
+            intent_rationale="更新后条件符合即刻行动",
+        )
+
     res = run_radar_pipeline(
         profile_path=mock_profile_file,
         observations_source=[update_obs],
         evaluator_fn=fake_re_evaluator,
+        intent_evaluator_fn=fake_intent_evaluator,
         entity_resolver_fn=fake_entity_resolver,
         data_dir=data_dir,
         reports_dir=reports_dir,
@@ -344,10 +352,17 @@ def test_entity_resolution_slice_c_different(tmp_path: Path, mock_profile_file: 
             evaluated_at=now,
         )
 
+    def fake_intent_evaluator(profile, obs, ev):
+        return OpportunityIntentDecision(
+            opportunity_intent="WATCH_LEARN",
+            intent_rationale="不同岗位但资格明显不符，保持情报观察",
+        )
+
     res = run_radar_pipeline(
         profile_path=mock_profile_file,
         observations_source=[new_obs],
         evaluator_fn=fake_evaluator,
+        intent_evaluator_fn=fake_intent_evaluator,
         entity_resolver_fn=fake_entity_resolver,
         data_dir=data_dir,
         reports_dir=reports_dir,
@@ -423,10 +438,17 @@ def test_entity_resolution_slice_d_uncertain(tmp_path: Path, mock_profile_file: 
             evaluated_at=now,
         )
 
+    def fake_intent_evaluator(profile, obs, ev):
+        return OpportunityIntentDecision(
+            opportunity_intent="CONDITIONAL",
+            intent_rationale="存疑岗位待进一步确认，保持条件关注",
+        )
+
     res = run_radar_pipeline(
         profile_path=mock_profile_file,
         observations_source=[uncertain_obs],
         evaluator_fn=fake_evaluator,
+        intent_evaluator_fn=fake_intent_evaluator,
         entity_resolver_fn=fake_entity_resolver,
         data_dir=data_dir,
         reports_dir=reports_dir,

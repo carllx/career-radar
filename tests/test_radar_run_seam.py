@@ -8,6 +8,7 @@ from career_radar.models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.runner import run_radar_pipeline
@@ -106,6 +107,30 @@ class FakeAgentEvaluator:
             )
         else:
             raise ValueError(f"Unknown mock observation ID: {obs_id}")
+
+
+class FakeAgentIntentEvaluator:
+    """Test double for Agent Opportunity Intent Semantic Seam."""
+
+    def __call__(
+        self, profile: CandidateProfile, observation: SourceObservation, evaluation_result: EvaluationResult
+    ) -> OpportunityIntentDecision:
+        obs_id = observation.observation_id
+        if obs_id == "obs_mock_001":
+            return OpportunityIntentDecision(
+                opportunity_intent="APPLY_NOW",
+                intent_rationale="数字媒体专任教师对口，符合即刻投递意图",
+            )
+        elif obs_id == "obs_mock_002":
+            return OpportunityIntentDecision(
+                opportunity_intent="CONDITIONAL",
+                intent_rationale="交叉学科条件待核实，持条件关注态度",
+            )
+        else:
+            return OpportunityIntentDecision(
+                opportunity_intent="WATCH_LEARN",
+                intent_rationale="理论物理岗位不匹配，保留为情报观察",
+            )
 
 
 @pytest.fixture
@@ -236,6 +261,7 @@ def test_career_radar_highest_seam_full_run(mock_radar_env):
         profile_path=mock_radar_env["profile_path"],
         observations_source=mock_radar_env["observations_fixture_path"],
         evaluator_fn=evaluator,
+        intent_evaluator_fn=FakeAgentIntentEvaluator(),
         entity_resolver_fn=fake_entity_resolver,
         data_dir=mock_radar_env["data_dir"],
         reports_dir=mock_radar_env["reports_dir"],

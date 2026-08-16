@@ -21,6 +21,7 @@ from career_radar.models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.orchestrator import RadarOrchestrator, RadarRunOutcome
@@ -347,6 +348,12 @@ class TestRadarOrchestratorSeam:
         def mock_evaluator(profile, obs):
             return make_eval_result("PASS") if "药科大学" in obs.organization else make_eval_result("REVIEW")
 
+        def mock_intent_evaluator(profile, obs, eval_res):
+            return OpportunityIntentDecision(
+                opportunity_intent="APPLY_NOW" if "药科大学" in obs.organization else "CONDITIONAL",
+                intent_rationale="Synthetic test intent rationale for university post.",
+            )
+
         orchestrator = RadarOrchestrator(
             profile_path=temp_env["profile_path"],
             seed_sources_path=temp_env["seeds_path"],
@@ -360,6 +367,7 @@ class TestRadarOrchestratorSeam:
             source_decisions=[discovery_decision],
             entity_resolver_fn=mock_resolver,
             evaluator_fn=mock_evaluator,
+            intent_evaluator_fn=mock_intent_evaluator,
             run_date="2026-08-15",
         )
 

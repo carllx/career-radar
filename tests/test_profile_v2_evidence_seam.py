@@ -28,6 +28,7 @@ from career_radar.models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
     calculate_chronological_age,
 )
@@ -138,9 +139,16 @@ candidate:
             EvaluationResult(final_recommendation="建议关注", dimension_evaluations=dim_evals, evaluated_at="2026-08-16T08:00:00")
         )
 
+    def dummy_intent_evaluator(prof: CandidateProfile, observation: SourceObservation, eval_res: EvaluationResult) -> OpportunityIntentDecision:
+        return OpportunityIntentDecision(
+            opportunity_intent="APPLY_NOW",
+            intent_rationale="Synthetic v1 profile test intent rationale",
+        )
+
     outcome = orchestrator.run(
         observations=[obs],
         evaluator_fn=dummy_evaluator,
+        intent_evaluator_fn=dummy_intent_evaluator,
         run_date="2026-08-16",
     )
 
@@ -393,9 +401,16 @@ candidate:
             EvaluationResult(final_recommendation="建议关注", dimension_evaluations=dim_evals, evaluated_at="2026-08-16T08:00:00")
         )
 
+    def agent_intent_evaluator(prof: CandidateProfile, observation: SourceObservation, eval_res: EvaluationResult) -> OpportunityIntentDecision:
+        return OpportunityIntentDecision(
+            opportunity_intent="APPLY_NOW",
+            intent_rationale="Synthetic v2 profile test intent rationale",
+        )
+
     outcome = orchestrator.run(
         observations=[obs],
         evaluator_fn=agent_evaluator,
+        intent_evaluator_fn=agent_intent_evaluator,
         run_date="2026-08-16",
     )
 

@@ -17,6 +17,7 @@ from career_radar.models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from career_radar.runner import (
@@ -150,6 +151,7 @@ def test_same_run_cross_channel_observations_sequential_resolution(
         profile_path=mock_profile_file,
         observations_source=[obs_a, obs_b],
         evaluator_fn=lambda prof, obs: _create_eval_result(),
+        intent_evaluator_fn=lambda prof, obs, ev: OpportunityIntentDecision(opportunity_intent="APPLY_NOW", intent_rationale="Synthetic working state test rationale"),
         entity_resolver_fn=mock_agent_entity_resolver,
         data_dir=data_dir,
         reports_dir=reports_dir,
@@ -245,6 +247,7 @@ def test_same_run_failure_atomicity_preserves_disk_store(
             profile_path=mock_profile_file,
             observations_source=[obs_a, obs_b],
             evaluator_fn=lambda prof, obs: _create_eval_result(),
+            intent_evaluator_fn=lambda prof, obs, ev: OpportunityIntentDecision(opportunity_intent="APPLY_NOW", intent_rationale="Synthetic working state test rationale"),
             entity_resolver_fn=mock_resolver,
             data_dir=data_dir,
             reports_dir=reports_dir,
@@ -313,6 +316,7 @@ def test_empty_store_multi_observation_without_resolver_fails_fast_on_second_obs
             profile_path=mock_profile_file,
             observations_source=[obs_a, obs_b],
             evaluator_fn=lambda prof, obs: _create_eval_result(),
+            intent_evaluator_fn=lambda prof, obs, ev: OpportunityIntentDecision(opportunity_intent="APPLY_NOW", intent_rationale="Synthetic working state test rationale"),
             entity_resolver_fn=None,  # No entity resolver provided!
             data_dir=data_dir,
             reports_dir=reports_dir,

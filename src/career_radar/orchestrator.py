@@ -155,8 +155,15 @@ class RadarOrchestrator:
                         f"Missing required evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
                     )
                 eval_res = evaluator_fn(profile, obs)
-                if intent_evaluator_fn:
-                    intent_res = intent_evaluator_fn(profile, obs, eval_res)
+                if not intent_evaluator_fn:
+                    raise ValueError(
+                        f"Missing required intent_evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
+                    )
+                intent_res = intent_evaluator_fn(profile, obs, eval_res)
+                if not intent_res:
+                    raise ValueError(
+                        f"intent_evaluator_fn returned None for {decision.resolution} on observation '{obs.observation_id}'. A valid OpportunityIntentDecision is required."
+                    )
 
             session.stage_decision(obs, decision, eval_res, intent_res)
 

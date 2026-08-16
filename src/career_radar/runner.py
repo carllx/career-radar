@@ -346,6 +346,7 @@ def finalize_incremental_run(
     observations: List[SourceObservation],
     resolution_decisions: List[EntityResolutionDecision],
     evaluation_results: Dict[str, EvaluationResult],
+    intent_decisions: Optional[Dict[str, OpportunityIntentDecision]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
@@ -360,10 +361,16 @@ def finalize_incremental_run(
         eval_res = evaluation_results.get(obs.observation_id) or (
             evaluation_results.get(decision.target_opportunity_id) if decision.target_opportunity_id else None
         )
+        intent_res = None
+        if intent_decisions:
+            intent_res = intent_decisions.get(obs.observation_id) or (
+                intent_decisions.get(decision.target_opportunity_id) if decision.target_opportunity_id else None
+            )
         session.stage_decision(
             observation=obs,
             decision=decision,
             evaluation_result=eval_res,
+            intent_decision=intent_res,
             current_time=datetime.now().isoformat(),
         )
     return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
@@ -372,6 +379,7 @@ def finalize_incremental_run(
 def finalize_evaluation_run(
     observations: List[SourceObservation],
     evaluation_results: List[EvaluationResult],
+    intent_results: Optional[List[OpportunityIntentDecision]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
@@ -388,10 +396,14 @@ def finalize_evaluation_run(
         for _ in observations
     ]
     eval_map = {obs.observation_id: ev for obs, ev in zip(observations, evaluation_results)}
+    intent_map = {}
+    if intent_results:
+        intent_map = {obs.observation_id: it for obs, it in zip(observations, intent_results)}
     return finalize_incremental_run(
         observations=observations,
         resolution_decisions=default_decisions,
         evaluation_results=eval_map,
+        intent_decisions=intent_map if intent_results else None,
         data_dir=data_dir,
         reports_dir=reports_dir,
         run_date=run_date,
@@ -448,9 +460,20 @@ def run_radar_pipeline(
         eval_res = None
         intent_res = None
         if decision.resolution in ("different", "update", "uncertain"):
+            if not evaluator_fn:
+                raise ValueError(
+                    f"Missing required evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
+                )
             eval_res = evaluator_fn(profile, obs)
-            if intent_evaluator_fn:
-                intent_res = intent_evaluator_fn(profile, obs, eval_res)
+            if not intent_evaluator_fn:
+                raise ValueError(
+                    f"Missing required intent_evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
+                )
+            intent_res = intent_evaluator_fn(profile, obs, eval_res)
+            if not intent_res:
+                raise ValueError(
+                    f"intent_evaluator_fn returned None for {decision.resolution} on observation '{obs.observation_id}'. A valid OpportunityIntentDecision is required."
+                )
 
         session.stage_decision(obs, decision, eval_res, intent_res)
 
