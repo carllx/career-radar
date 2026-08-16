@@ -92,7 +92,7 @@ class DigestReporter:
             f"# Career Radar 每日求职情报简报 ({run_date})",
             "",
             f"> **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
-            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 资格建议关注：{len(recommended)} 个 | 待确认：{len(review_needed)} 个 | 情报观察：{len(watch_learn_opps)} 个",
+            f"> **本次报告机会数**：{len(touched_opps)} 个 | 新增资格建议关注：{len(recommended)} 个 | 新增待确认：{len(review_needed)} 个 | 情报观察（新增/更新）：{len(watch_learn_opps)} 个",
             "",
             "---",
             "",

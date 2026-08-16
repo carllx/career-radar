@@ -165,6 +165,9 @@ def test_update_watch_learn_market_intelligence_refreshes_snapshot_and_digest(te
 
     # Verify Daily Digest renders updated Opportunity in dedicated WATCH_LEARN section
     report_text = Path(outcome.report_path).read_text(encoding="utf-8")
+    assert "本次巡检机会总数：0" not in report_text
+    assert "本次报告机会数：0 个" not in report_text
+    assert "> **本次报告机会数**：1 个 | 新增资格建议关注：0 个 | 新增待确认：0 个 | 情报观察（新增/更新）：1 个" in report_text
     assert "## 🔭 WATCH_LEARN / 市场情报观察" in report_text
     assert "Lead Technical Director" in report_text
     assert "- **Brief**：Fresh 2026 AAA TD Pipeline Brief" in report_text
