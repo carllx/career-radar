@@ -43,7 +43,7 @@ class ListingAcquisitionHelper:
             for lk in links:
                 u = lk.get("url", "")
                 if re.search(pattern_hint, u):
-                    return u
+                    return urljoin(listing_url, u)
 
         # 3. Configured link index
         link_index = metadata.get("detail_link_index")

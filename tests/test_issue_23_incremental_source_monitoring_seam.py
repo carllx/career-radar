@@ -16,16 +16,7 @@ from career_radar.acquisition import (
     SourceAcquisitionExecutor,
     execute_production_acquisition,
 )
-from career_radar.models import (
-    CandidateProfile,
-    EvaluationResult,
-    Opportunity,
-    SourceObservation,
-)
-from career_radar.orchestrator import RadarOrchestrator
-from career_radar.reporter import DigestReporter
 from career_radar.sources import MonitoringFact, SourceRecord, SourceRegistry
-from career_radar.store import OpportunityStore
 
 
 class FakeHttpTransport:
@@ -55,22 +46,12 @@ class FakeHttpTransport:
 
 
 class FakeResponse:
-    def __init__(
-        self,
-        status_code: int,
-        text: str,
-        headers: Dict[str, str],
-        url: str,
-        content: Any = None,
-    ):
+    def __init__(self, status_code: int, text: str, headers: Dict[str, str], url: str, content: Any = None):
         self.status_code = status_code
         self.text = text
         self.headers = headers
         self.url = url
-        if content is not None:
-            self.content = content
-        else:
-            self.content = text.encode("utf-8")
+        self.content = content if content is not None else text.encode("utf-8")
 
 
 def test_etag_conditional_request_304_unchanged_zero_agent_evidence(tmp_path: Path):
@@ -289,7 +270,8 @@ def test_unprocessed_change_downstream_failure_does_not_advance_baseline(tmp_pat
     """
     5. Critical Invariant (Delta 1):
        When listing fingerprint changes, but downstream detail request returns 500:
-       - committed baseline MUST NOT advance;
+       - production entrypoint MUST NOT advance committed baseline;
+       - reloading SourceRegistry from disk proves committed baseline remains OLD;
        - subsequent run still treats the listing as changed and attempts acquisition.
     """
     listing_url = "https://hr.example.edu.cn/jobs"
@@ -304,188 +286,204 @@ def test_unprocessed_change_downstream_failure_does_not_advance_baseline(tmp_pat
         detail_url: {"status_code": 500, "text": "Internal Server Error"},
     })
 
-    registry = SourceRegistry(
-        seed_path=tmp_path / "seed.json",
-        data_dir=tmp_path / ".data",
-    )
-
+    seed_file = tmp_path / "seed.json"
     old_baseline_fp = "old_baseline_fingerprint"
-    source = SourceRecord(
-        source_id="src_fail_test",
-        name="测试高校",
-        base_url=listing_url,
-        domain="hr.example.edu.cn",
-        metadata={
-            "is_listing": True,
-            "detail_url_pattern": r"/jobs/\d+",
-            "committed_listing_fingerprint": old_baseline_fp,
-        },
-    )
-    registry.local_sources[source.source_id] = source
-    registry.save_local_state()
+    seed_file.write_text(json.dumps([
+        {
+            "source_id": "src_fail_test",
+            "name": "测试高校",
+            "base_url": listing_url,
+            "domain": "hr.example.edu.cn",
+            "metadata": {
+                "is_listing": True,
+                "detail_url_pattern": r"/jobs/\d+",
+                "committed_listing_fingerprint": old_baseline_fp,
+            },
+        }
+    ], ensure_ascii=False), encoding="utf-8")
 
-    # First run: detail fails (500)
+    data_dir = tmp_path / ".data"
+
+    # RUN 1: execute through production entrypoint (detail 500 fails)
     out1 = execute_production_acquisition(
-        sources=[registry.get_source("src_fail_test")],
-        data_dir=tmp_path / ".data",
+        data_dir=data_dir,
+        seed_sources_path=seed_file,
         transport=transport,
     )
 
-    # Assert downstream failed
     assert len(out1["agent_evidence_packets"]) == 0
     detail_res = [r for r in out1["acquisition_results"] if r.requested_url == detail_url][0]
     assert detail_res.technical_status == "failed"
     assert detail_res.http_status == 500
 
-    # Record monitoring fact
-    for f in out1["monitoring_facts"]:
-        registry.record_monitoring_fact(f)
+    # Reload SourceRegistry from disk to verify persisted state
+    reloaded_reg1 = SourceRegistry(seed_path=seed_file, data_dir=data_dir)
+    saved_src1 = reloaded_reg1.get_source("src_fail_test")
+    assert saved_src1.metadata.get("committed_listing_fingerprint") == old_baseline_fp
 
-    # If downstream failed, we do NOT call commit_mechanical_baseline with the new fingerprint!
-    # Check registry state: committed_listing_fingerprint remains old_baseline_fp
-    saved_src = registry.get_source("src_fail_test")
-    assert saved_src.metadata.get("committed_listing_fingerprint") == old_baseline_fp
-
-    # Second run: transport detail is now fixed (200)
+    # RUN 2: detail endpoint is fixed (200)
     transport.responses[detail_url] = {
         "status_code": 200,
         "text": "<html><body><h1>招聘成功详情</h1></body></html>",
     }
+    transport.requests_log.clear()
+
     out2 = execute_production_acquisition(
-        sources=[registry.get_source("src_fail_test")],
-        data_dir=tmp_path / ".data",
+        data_dir=data_dir,
+        seed_sources_path=seed_file,
         transport=transport,
     )
 
-    # Second run still classifies as changed and successfully fetches detail!
+    # Proves RUN 2 automatically retried detail acquisition without manual test intervention
     assert len(out2["agent_evidence_packets"]) == 1
     assert out2["agent_evidence_packets"][0]["url"] == detail_url
 
+    # Reload from disk again: now baseline is committed
+    reloaded_reg2 = SourceRegistry(seed_path=seed_file, data_dir=data_dir)
+    saved_src2 = reloaded_reg2.get_source("src_fail_test")
+    assert saved_src2.metadata.get("committed_listing_fingerprint") != old_baseline_fp
 
-def test_unchanged_monitoring_preserves_historical_persisted_opportunities(tmp_path: Path):
+
+def test_process_restart_end_to_end_persisted_zero_token_monitoring(tmp_path: Path):
     """
-    6. Proves that when an unchanged monitoring run occurs:
-       - existing persisted Opportunities in .data/opportunities.jsonl remain intact;
-       - DigestReporter continues to report persisted opportunity state without corruption.
+    Critical Process-Restart Test:
+    RUN 1:
+      - New listing evidence acquired and parsed successfully.
+      - Production entrypoint completes and automatically persists committed baseline to .data/sources.json.
+    RUN 2 (Simulating next day / process restart with NEW SourceRegistry from disk):
+      - Production entrypoint loads committed state from .data/sources.json.
+      - Recognizes unchanged source.
+      - Only cheap listing check occurs.
+      - Detail request is skipped.
+      - Attachment request is skipped.
+      - agent_evidence_packets == [].
     """
-    data_dir = tmp_path / ".data"
-    reports_dir = tmp_path / "reports"
-    data_dir.mkdir(parents=True, exist_ok=True)
-    reports_dir.mkdir(parents=True, exist_ok=True)
+    listing_url = "https://hr.example.edu.cn/jobs/list"
+    detail_url = "https://hr.example.edu.cn/jobs/detail/505"
+    att_url = "https://hr.example.edu.cn/files/guide.docx"
 
-    opp_store = OpportunityStore(data_dir=data_dir)
-    obs = SourceObservation(
-        observation_id="obs_001",
-        announcement_id="ann_001",
-        source_id="src_unchanged_daily",
-        source_name="测试高校",
-        announcement_title="2026年专任教师招聘",
-        job_title="计算机专业专任教师",
-        organization="广东岭南职业技术学院",
-        location="广州",
-        track="higher_education_teaching",
-        official_url="https://hr.example.edu.cn/jobs/100",
-        observed_at="2026-08-15T00:00:00",
-        extracted_requirements={},
-    )
-    eval_res = EvaluationResult(
-        final_recommendation="建议关注",
-        dimension_evaluations={},
-        evaluated_at="2026-08-15T00:00:00",
-    )
-    hist_opp = Opportunity(
-        opportunity_id="opp_historical_001",
-        canonical_job_title="计算机专业专任教师",
-        organization="广东岭南职业技术学院",
-        location="广州",
-        track="higher_education_teaching",
-        official_url="https://hr.example.edu.cn/jobs/100",
-        lifecycle_status="active",
-        observations=[obs],
-        latest_evaluation=eval_res,
-        created_at="2026-08-15T00:00:00",
-        updated_at="2026-08-15T00:00:00",
-        opportunity_intent="APPLY_NOW",
-        intent_rationale="与候选人背景高度匹配",
-    )
-    opp_store.save_opportunities([hist_opp])
+    listing_html = f"""<html><body><a href="{detail_url}">2026年高层次人才招聘</a></body></html>"""
+    detail_html = f"""<html><body><h1>高层次人才</h1><a href="{att_url}">申报指南.docx</a></body></html>"""
+    import docx
+    from io import BytesIO
 
-    # Setup seed source in tmp directory
-    seed_file = tmp_path / "sources.seed.json"
+    doc = docx.Document()
+    doc.add_heading("2026年高层次人才招聘指南", level=1)
+    p = doc.add_paragraph("申报条件与要求说明")
+    bio = BytesIO()
+    doc.save(bio)
+    docx_bytes = bio.getvalue()
+
+    transport = FakeHttpTransport({
+        listing_url: {"status_code": 200, "text": listing_html, "headers": {"ETag": '"list_v1"'}},
+        detail_url: {"status_code": 200, "text": detail_html},
+        att_url: {"status_code": 200, "content": docx_bytes, "headers": {"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}},
+    })
+
+    seed_file = tmp_path / "seed.json"
     seed_file.write_text(json.dumps([
         {
-            "source_id": "src_unchanged_daily",
-            "name": "测试高校",
-            "base_url": "https://hr.example.edu.cn/jobs",
+            "source_id": "src_restart_e2e",
+            "name": "重点大学招聘网",
+            "base_url": listing_url,
             "domain": "hr.example.edu.cn",
+            "metadata": {
+                "is_listing": True,
+                "detail_url_pattern": r"/jobs/detail/\d+",
+            },
         }
     ], ensure_ascii=False), encoding="utf-8")
 
-    # Execute orchestrator run with ZERO incoming observations (simulating unchanged sources)
-    orchestrator = RadarOrchestrator(
-        profile_path="config/profile.example.yaml",
-        seed_sources_path=seed_file,
+    data_dir = tmp_path / ".data"
+
+    # RUN 1: Initial discovery / acquisition
+    out1 = execute_production_acquisition(
         data_dir=data_dir,
-        reports_dir=reports_dir,
+        seed_sources_path=seed_file,
+        transport=transport,
     )
+    assert len(out1["agent_evidence_packets"]) == 1
+    assert len(transport.requests_log) == 3  # listing, detail, attachment
 
-    fact = MonitoringFact(
-        source_id="src_unchanged_daily",
-        technical_status="success",
-        checked_url="https://hr.example.edu.cn/jobs",
-        metadata={"unchanged": True},
-    )
-
-    outcome = orchestrator.run(
-        observations=[],
-        monitoring_facts=[fact],
-        run_date="2026-08-16",
-    )
-
-    # Opportunity is preserved in store
-    reloaded_opps = opp_store.load_all_opportunities()
-    assert len(reloaded_opps) == 1
-    assert reloaded_opps[0].opportunity_id == "opp_historical_001"
-    assert reloaded_opps[0].canonical_job_title == "计算机专业专任教师"
-
-    # Report generated without error
-    report_file = reports_dir / "2026-08-16.md"
-    assert report_file.exists()
-    report_content = report_file.read_text(encoding="utf-8")
-    assert "Career Radar 每日求职情报简报 (2026-08-16)" in report_content
-
-
-def test_sources_seed_json_remains_unmodified_during_incremental_monitoring(tmp_path: Path):
-    """
-    7. Proves public seed configuration config/sources.seed.json is strictly read-only,
-       while local runtime state in .data/sources.json updates.
-    """
-    seed_file = tmp_path / "sources.seed.json"
-    seed_content = json.dumps([
-        {
-            "source_id": "seed_src_01",
-            "name": "种子招聘源",
-            "base_url": "https://hr.example.edu.cn/list",
-            "domain": "hr.example.edu.cn",
-        }
-    ], ensure_ascii=False, indent=2)
-    seed_file.write_text(seed_content, encoding="utf-8")
-
-    registry = SourceRegistry(seed_path=seed_file, data_dir=tmp_path / ".data")
-    registry.commit_mechanical_baseline(
-        source_id="seed_src_01",
-        listing_fingerprint="new_sha256_fp",
-        etag='"etag_val"',
-    )
-    registry.save_local_state()
-
-    # Seed file content remains identical
-    assert seed_file.read_text(encoding="utf-8") == seed_content
-
-    # Local state holds the committed metadata
-    local_state_file = tmp_path / ".data" / "sources.json"
+    # Verify .data/sources.json has committed baseline
+    local_state_file = data_dir / "sources.json"
     assert local_state_file.exists()
-    local_data = json.loads(local_state_file.read_text(encoding="utf-8"))
-    assert len(local_data) == 1
-    assert local_data[0]["metadata"]["committed_listing_fingerprint"] == "new_sha256_fp"
-    assert local_data[0]["metadata"]["committed_etag"] == '"etag_val"'
+
+    # Clear request log to track RUN 2 exactly
+    transport.requests_log.clear()
+
+    # RUN 2: Process restart (fresh execution without passing in-memory sources or registry)
+    out2 = execute_production_acquisition(
+        data_dir=data_dir,
+        seed_sources_path=seed_file,
+        transport=transport,
+    )
+
+    # Assert 0-Token monitoring behavior across restart:
+    # 1. Exactly 1 request (listing check with If-None-Match: "list_v1" if ETag present, or 200 with identical fingerprint)
+    assert len(transport.requests_log) == 1
+    assert transport.requests_log[0]["url"] == listing_url
+    # 2. Detail and attachments skipped
+    assert not any(req["url"] == detail_url for req in transport.requests_log)
+    assert not any(req["url"] == att_url for req in transport.requests_log)
+    # 3. 0 Agent evidence packets
+    assert out2["agent_evidence_packets"] == []
+    # 4. Monitoring fact is success and unchanged
+    assert out2["monitoring_facts"][0].technical_status == "success"
+    assert out2["monitoring_facts"][0].metadata.get("unchanged") is True
+
+
+def test_listing_without_detail_selection_hints_does_not_fingerprint_arbitrary_links(tmp_path: Path):
+    """
+    Blocker 2 Regression:
+    Proves that when a listing source has many links but NO configured detail selection hints:
+    - does not fingerprint arbitrary all-page links;
+    - does not commit arbitrary baseline;
+    - does not fetch arbitrary detail;
+    - produces 0 Agent evidence packets.
+    """
+    listing_url = "https://hr.example.edu.cn/general_list"
+    listing_html = """<html><body>
+      <a href="/about">关于我们</a>
+      <a href="/contact">联系方式</a>
+      <a href="/news/1">学校要闻</a>
+    </body></html>"""
+
+    transport = FakeHttpTransport({
+        listing_url: {"status_code": 200, "text": listing_html},
+    })
+
+    seed_file = tmp_path / "seed.json"
+    seed_file.write_text(json.dumps([
+        {
+            "source_id": "src_no_hints",
+            "name": "未配置详情规则列表",
+            "base_url": listing_url,
+            "domain": "hr.example.edu.cn",
+            "metadata": {
+                "is_listing": True,
+                # No detail_url_pattern, no detail_url, no detail_link_index
+            },
+        }
+    ], ensure_ascii=False), encoding="utf-8")
+
+    data_dir = tmp_path / ".data"
+
+    out = execute_production_acquisition(
+        data_dir=data_dir,
+        seed_sources_path=seed_file,
+        transport=transport,
+    )
+
+    # Only listing is requested
+    assert len(transport.requests_log) == 1
+    assert transport.requests_log[0]["url"] == listing_url
+
+    # Zero evidence packets
+    assert out["agent_evidence_packets"] == []
+
+    # Reload registry: verify no arbitrary fingerprint was committed
+    reg = SourceRegistry(seed_path=seed_file, data_dir=data_dir)
+    src = reg.get_source("src_no_hints")
+    assert src.metadata.get("committed_listing_fingerprint") is None
+

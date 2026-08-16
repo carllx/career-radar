@@ -117,6 +117,8 @@ class SourceRegistry:
         if self.seed_path.exists():
             with open(self.seed_path, "r", encoding="utf-8") as f:
                 raw_seeds = json.load(f)
+            if isinstance(raw_seeds, dict):
+                raw_seeds = raw_seeds.get("sources", [raw_seeds])
             for item in raw_seeds:
                 rec = SourceRecord.from_dict({
                     **item,
@@ -138,13 +140,25 @@ class SourceRegistry:
 
     def get_all_sources(self) -> List[SourceRecord]:
         """
-        Returns merged list of all sources. Local state overrides seed records.
+        Returns merged list of all sources. Local state overrides seed records,
+        while preserving seed configuration metadata (such as hints) that local state didn't explicitly override.
         """
         merged: Dict[str, SourceRecord] = {}
         for sid, srec in self.seed_sources.items():
             merged[sid] = srec
         for sid, lrec in self.local_sources.items():
-            merged[sid] = lrec
+            if sid in merged:
+                # Merge seed metadata with local metadata so hints (e.g. detail_url_pattern) are retained
+                merged_meta = dict(merged[sid].metadata or {})
+                if lrec.metadata:
+                    merged_meta.update(lrec.metadata)
+                merged[sid] = SourceRecord.from_dict({
+                    **merged[sid].to_dict(),
+                    **lrec.to_dict(),
+                    "metadata": merged_meta,
+                })
+            else:
+                merged[sid] = lrec
         return list(merged.values())
 
     def get_active_sources(self) -> List[SourceRecord]:
@@ -162,7 +176,17 @@ class SourceRegistry:
 
     def get_source(self, source_id: str) -> Optional[SourceRecord]:
         if source_id in self.local_sources:
-            return self.local_sources[source_id]
+            lrec = self.local_sources[source_id]
+            if source_id in self.seed_sources:
+                merged_meta = dict(self.seed_sources[source_id].metadata or {})
+                if lrec.metadata:
+                    merged_meta.update(lrec.metadata)
+                return SourceRecord.from_dict({
+                    **self.seed_sources[source_id].to_dict(),
+                    **lrec.to_dict(),
+                    "metadata": merged_meta,
+                })
+            return lrec
         return self.seed_sources.get(source_id)
 
     def record_monitoring_fact(

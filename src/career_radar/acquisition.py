@@ -1,15 +1,6 @@
 """
 Production Source Acquisition Executor for Career Radar.
-Respects CONTEXT.md, ADR-0002, Issue #19, Spec #20, Issue #21 and Issue #22.
-
-Establishes:
-1. Every physical HTTP request produces an AcquisitionResult (listing GET, detail GET, attachment GET);
-2. Multi-hop flow: Listing HTML -> deterministic detail selection -> Detail HTML -> Attachments -> Structured Packet;
-3. Mechanical, config-driven detail link selection (via SourceRecord metadata hints, no semantic job heuristics);
-4. Preserves raw listing, raw detail, and raw attachment evidence separately on disk;
-5. Downstream parsing errors never erase already-observed network acquisition facts;
-6. Failed technical acquisitions and parser failures are strictly excluded from Agent content evidence;
-7. Structural production entrypoint accepting only valid acquisition inputs.
+Respects CONTEXT.md, ADR-0002, Issue #19, Spec #20, Issue #21, #22, and #23.
 """
 
 from datetime import datetime
@@ -26,7 +17,7 @@ from .attachment_helper import AttachmentAcquisitionHelper
 from .incremental_helper import IncrementalAcquisitionHelper
 from .listing_helper import ListingAcquisitionHelper
 from .parser import AttachmentParser, HTMLAnnouncementParser
-from .sources import MonitoringFact, SourceRecord
+from .sources import MonitoringFact, SourceRecord, SourceRegistry
 
 
 class SourceAcquisitionExecutor:
@@ -472,24 +463,28 @@ class SourceAcquisitionExecutor:
 
 
 def execute_production_acquisition(
-    sources: List[SourceRecord],
+    sources: Optional[List[SourceRecord]] = None,
     data_dir: Union[str, Path] = ".data",
+    seed_sources_path: Union[str, Path] = "config/sources.seed.json",
     transport: Any = None,
+    registry: Optional[SourceRegistry] = None,
 ) -> Dict[str, Any]:
-    executor = SourceAcquisitionExecutor(data_dir=data_dir, transport=transport)
-    session_results: List[SourceAcquisitionSessionResult] = []
-    all_acquisition_results: List[AcquisitionResult] = []
+    """
+    Production Acquisition Entrypoint.
+    Owns and drives the mechanical runtime-state lifecycle:
+    1. Resolves active sources from SourceRegistry (including local runtime state).
+    2. Builds conditional headers from committed baselines and executes acquisition.
+    3. Records MonitoringFact for every checked source.
+    4. When change acquisition/parsing succeeds, commits new mechanical baseline.
+    5. Atomically persists local runtime state to .data/sources.json.
+    """
+    data_path = Path(data_dir)
+    if registry is None:
+        registry = SourceRegistry(seed_path=seed_sources_path, data_dir=data_path)
 
-    for src in sources:
-        res = executor.acquire_source(src)
-        session_results.append(res)
-        all_acquisition_results.extend(res.acquisition_results)
-
-    return {
-        "session_results": session_results,
-        "acquisition_results": all_acquisition_results,
-        "monitoring_facts": [r.monitoring_fact for r in session_results],
-        "agent_evidence_packets": [
-            r.agent_evidence_packet for r in session_results if r.agent_evidence_packet is not None
-        ],
-    }
+    executor = SourceAcquisitionExecutor(data_dir=data_path, transport=transport)
+    return IncrementalAcquisitionHelper.orchestrate_acquisition_and_state(
+        executor=executor,
+        registry=registry,
+        sources=sources,
+    )

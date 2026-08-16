@@ -10,7 +10,7 @@ import re
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin
 
-from .sources import SourceRecord
+from .sources import SourceRecord, SourceRegistry
 
 
 class IncrementalAcquisitionHelper:
@@ -89,11 +89,9 @@ class IncrementalAcquisitionHelper:
                 if u:
                     extracted_urls.append(urljoin(listing_url, u))
 
-        # 4. Without specific hints, use canonical unique set of all parsed links on the listing page
+        # 4. Without specific hints, no explicit selection exists: do not fingerprint arbitrary links
         if not extracted_urls:
-            extracted_urls = IncrementalAcquisitionHelper._extract_matching_urls(
-                links, listing_url, pattern=None
-            )
+            return None
 
         # Canonicalize: sort unique URLs
         canonical_urls = sorted(list(set(extracted_urls)))
@@ -123,3 +121,115 @@ class IncrementalAcquisitionHelper:
             return committed_hash == observed_hash
 
         return False
+
+    @staticmethod
+    def should_commit_baseline(
+        session_result: Any,
+    ) -> bool:
+        """
+        Determines if an acquisition session succeeded sufficiently to advance the committed baseline.
+        Rule:
+        - If unchanged (304 or fingerprint equal), baseline is already committed/preserved.
+        - If changed or new, detail and required attachments must have technical_status == 'success'.
+        - If any required physical HTTP request failed or parser failed, returns False.
+        """
+        if session_result.monitoring_fact.technical_status != "success":
+            return False
+
+        # If any physical acquisition in the session failed, do not advance baseline
+        for acq in session_result.acquisition_results:
+            if acq.technical_status != "success":
+                return False
+
+        return True
+
+    @staticmethod
+    def extract_baseline_fields(
+        session_result: Any,
+    ) -> Dict[str, Any]:
+        """
+        Extracts mechanical baseline fields to commit from a successful session.
+        """
+        fields: Dict[str, Any] = {}
+        for acq in session_result.acquisition_results:
+            req_type = (acq.metadata or {}).get("request_type")
+            if req_type == "listing":
+                observed_fp = (acq.metadata or {}).get("observed_fingerprint")
+                if observed_fp:
+                    fields["listing_fingerprint"] = observed_fp
+                if acq.etag:
+                    fields["etag"] = acq.etag
+                if acq.last_modified:
+                    fields["last_modified"] = acq.last_modified
+            elif req_type == "detail":
+                if not fields.get("listing_fingerprint"):
+                    # Direct source
+                    if acq.response_hash:
+                        fields["response_hash"] = acq.response_hash
+                if acq.etag and not fields.get("etag"):
+                    fields["etag"] = acq.etag
+                if acq.last_modified and not fields.get("last_modified"):
+                    fields["last_modified"] = acq.last_modified
+        return fields
+
+    @staticmethod
+    def orchestrate_acquisition_and_state(
+        executor: Any,
+        registry: SourceRegistry,
+        sources: Optional[List[SourceRecord]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Orchestrates acquisition execution with mechanical state tracking:
+        1. Resolves target sources from registry.
+        2. Executes source acquisition for each source.
+        3. Records technical MonitoringFact.
+        4. Commits mechanical baseline on successful changed runs.
+        5. Atomically saves local runtime state to disk.
+        """
+        if sources is not None:
+            target_sources = []
+            for s in sources:
+                existing = registry.get_source(s.source_id)
+                if existing:
+                    target_sources.append(existing)
+                else:
+                    registry.local_sources[s.source_id] = s
+                    target_sources.append(s)
+        else:
+            target_sources = registry.get_active_sources()
+
+        session_results: List[Any] = []
+        all_acquisition_results: List[Any] = []
+
+        for src in target_sources:
+            # Ensure we use latest source state from registry
+            current_src = registry.get_source(src.source_id) or src
+            res = executor.acquire_source(current_src)
+            session_results.append(res)
+            all_acquisition_results.extend(res.acquisition_results)
+
+            # Record technical fact first
+            registry.record_monitoring_fact(res.monitoring_fact)
+
+            # Then commit baseline if eligible so baseline fields are preserved
+            if IncrementalAcquisitionHelper.should_commit_baseline(res):
+                baseline_fields = IncrementalAcquisitionHelper.extract_baseline_fields(res)
+                if baseline_fields:
+                    registry.commit_mechanical_baseline(
+                        source_id=src.source_id,
+                        listing_fingerprint=baseline_fields.get("listing_fingerprint"),
+                        response_hash=baseline_fields.get("response_hash"),
+                        etag=baseline_fields.get("etag"),
+                        last_modified=baseline_fields.get("last_modified"),
+                    )
+
+        registry.save_local_state()
+
+        return {
+            "session_results": session_results,
+            "acquisition_results": all_acquisition_results,
+            "monitoring_facts": [r.monitoring_fact for r in session_results],
+            "agent_evidence_packets": [
+                r.agent_evidence_packet for r in session_results if r.agent_evidence_packet is not None
+            ],
+        }
