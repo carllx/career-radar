@@ -23,6 +23,7 @@ import httpx
 
 from .acquisition_models import AcquisitionResult, SourceAcquisitionSessionResult
 from .attachment_helper import AttachmentAcquisitionHelper
+from .incremental_helper import IncrementalAcquisitionHelper
 from .listing_helper import ListingAcquisitionHelper
 from .parser import AttachmentParser, HTMLAnnouncementParser
 from .sources import MonitoringFact, SourceRecord
@@ -59,19 +60,22 @@ class SourceAcquisitionExecutor:
             evidence_dir=self.evidence_dir, attachment_parser=self.attachment_parser
         )
 
-    def _execute_http_get(self, url: str) -> Any:
-        headers = {
+    def _execute_http_get(self, url: str, headers: Optional[Dict[str, str]] = None) -> Any:
+        req_headers = {
             "User-Agent": self.user_agent,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         }
+        if headers:
+            req_headers.update(headers)
+
         if self.transport is not None:
             return self.transport.get(
-                url, headers=headers, timeout=self.timeout, verify=self.verify_ssl
+                url, headers=req_headers, timeout=self.timeout, verify=self.verify_ssl
             )
         return httpx.get(
             url,
-            headers=headers,
+            headers=req_headers,
             timeout=self.timeout,
             verify=self.verify_ssl,
             follow_redirects=True,
@@ -105,6 +109,7 @@ class SourceAcquisitionExecutor:
         session_id = f"acq_{uuid.uuid4().hex[:12]}"
         metadata = source.metadata or {}
         is_listing_source = bool(metadata.get("is_listing", False))
+        conditional_headers = IncrementalAcquisitionHelper.build_conditional_headers(source)
 
         if not is_listing_source:
             return self._acquire_detail_and_attachments(
@@ -112,18 +117,27 @@ class SourceAcquisitionExecutor:
                 detail_url=source.base_url,
                 session_id=session_id,
                 listing_result=None,
+                conditional_headers=conditional_headers,
             )
 
-        detail_url, listing_acq_res, monitoring_fact, raw_listing_path = ListingAcquisitionHelper.acquire_listing_page(
+        (
+            detail_url,
+            listing_acq_res,
+            monitoring_fact,
+            raw_listing_path,
+            is_unchanged,
+            observed_fingerprint,
+        ) = ListingAcquisitionHelper.acquire_listing_page(
             source=source,
             session_id=session_id,
             evidence_dir=self.evidence_dir,
             http_getter=self._execute_http_get,
             decode_html_fn=self._decode_html,
             html_parser=self.html_parser,
+            conditional_headers=conditional_headers,
         )
 
-        if not detail_url or listing_acq_res.technical_status == "failed":
+        if is_unchanged or not detail_url or listing_acq_res.technical_status == "failed":
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
                 acquisition_result=listing_acq_res,
@@ -146,13 +160,14 @@ class SourceAcquisitionExecutor:
         detail_url: str,
         session_id: str,
         listing_result: Optional[AcquisitionResult] = None,
+        conditional_headers: Optional[Dict[str, str]] = None,
     ) -> SourceAcquisitionSessionResult:
         now_iso = datetime.now().isoformat()
         detail_attempt_id = f"{session_id}_detail" if listing_result else session_id
         all_acq_results: List[AcquisitionResult] = [listing_result] if listing_result else []
 
         try:
-            resp = self._execute_http_get(detail_url)
+            resp = self._execute_http_get(detail_url, headers=conditional_headers)
         except Exception as detail_net_err:
             detail_acq_res = AcquisitionResult(
                 attempt_id=detail_attempt_id,
@@ -194,19 +209,88 @@ class SourceAcquisitionExecutor:
         final_url = str(getattr(resp, "url", detail_url) or detail_url)
         headers = dict(getattr(resp, "headers", {}) or {})
         content_type = headers.get("Content-Type", headers.get("content-type", "text/html"))
+        etag = headers.get("ETag") or headers.get("etag")
+        last_modified = headers.get("Last-Modified") or headers.get("last-modified")
+
+        # Handle HTTP 304 on direct detail source
+        if status_code == 304:
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
+                source_id=source.source_id,
+                requested_url=detail_url,
+                final_url=final_url,
+                timestamp=now_iso,
+                acquisition_method="native_http_get",
+                technical_status="success",
+                http_status=304,
+                content_type=content_type,
+                body_length=0,
+                response_hash="",
+                etag=etag,
+                last_modified=last_modified,
+                metadata={"request_type": "detail", "unchanged": True},
+            )
+            all_acq_results.append(detail_acq_res)
+            monitoring_fact = MonitoringFact(
+                source_id=source.source_id,
+                technical_status="success",
+                checked_url=final_url,
+                checked_at=now_iso,
+                metadata={"attempt_id": detail_attempt_id, "http_status": 304, "unchanged": True},
+            )
+            return SourceAcquisitionSessionResult(
+                source_id=source.source_id,
+                acquisition_result=detail_acq_res,
+                monitoring_fact=monitoring_fact,
+                raw_evidence_path=None,
+                agent_evidence_packet=None,
+                acquisition_results=all_acq_results,
+            )
 
         raw_bytes = getattr(resp, "content", b"") or (resp.text.encode("utf-8") if hasattr(resp, "text") else b"")
         body_length = len(raw_bytes)
         response_hash = hashlib.sha256(raw_bytes).hexdigest()
+
+        # Check if direct detail source is unchanged based on response hash
+        if not listing_result and IncrementalAcquisitionHelper.is_source_unchanged(source, observed_hash=response_hash):
+            detail_acq_res = AcquisitionResult(
+                attempt_id=detail_attempt_id,
+                source_id=source.source_id,
+                requested_url=detail_url,
+                final_url=final_url,
+                timestamp=now_iso,
+                acquisition_method="native_http_get",
+                technical_status="success",
+                http_status=status_code,
+                content_type=content_type,
+                body_length=body_length,
+                response_hash=response_hash,
+                etag=etag,
+                last_modified=last_modified,
+                metadata={"request_type": "detail", "unchanged": True},
+            )
+            all_acq_results.append(detail_acq_res)
+            monitoring_fact = MonitoringFact(
+                source_id=source.source_id,
+                technical_status="success",
+                checked_url=final_url,
+                checked_at=now_iso,
+                metadata={"attempt_id": detail_attempt_id, "response_hash": response_hash, "unchanged": True},
+            )
+            return SourceAcquisitionSessionResult(
+                source_id=source.source_id,
+                acquisition_result=detail_acq_res,
+                monitoring_fact=monitoring_fact,
+                raw_evidence_path=None,
+                agent_evidence_packet=None,
+                acquisition_results=all_acq_results,
+            )
 
         source_evidence_dir = self.evidence_dir / source.source_id
         source_evidence_dir.mkdir(parents=True, exist_ok=True)
         raw_evidence_file = source_evidence_dir / f"{detail_attempt_id}.html"
         raw_evidence_file.write_bytes(raw_bytes)
         raw_evidence_path = str(raw_evidence_file)
-
-        etag = headers.get("ETag") or headers.get("etag")
-        last_modified = headers.get("Last-Modified") or headers.get("last-modified")
 
         if status_code >= 400:
             detail_acq_res = AcquisitionResult(

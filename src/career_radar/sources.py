@@ -190,11 +190,58 @@ class SourceRegistry:
         meta = dict(src.metadata or {})
         if url:
             meta["last_checked_url"] = url
+        if fact.metadata:
+            for k in ("last_checked_url", "last_http_status", "last_observed_fingerprint", "last_observed_hash"):
+                if k in fact.metadata:
+                    meta[k] = fact.metadata[k]
 
         updated = SourceRecord.from_dict({
             **src.to_dict(),
             "last_monitored_at": now,
             "last_technical_status": tech_status,
+            "metadata": meta,
+        })
+        self.local_sources[source_id] = updated
+        return updated
+
+    def commit_mechanical_baseline(
+        self,
+        source_id: str,
+        listing_fingerprint: Optional[str] = None,
+        response_hash: Optional[str] = None,
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+        timestamp: Optional[str] = None,
+    ) -> SourceRecord:
+        """
+        Commits a successfully processed mechanical baseline (validators and fingerprints)
+        to the source record in local runtime state.
+        Preserves prior baseline if new value is None (e.g. on 304).
+        """
+        src = self.get_source(source_id)
+        if not src:
+            raise KeyError(f"Source '{source_id}' not found in registry")
+
+        now = timestamp or datetime.now().isoformat()
+        meta = dict(src.metadata or {})
+
+        if listing_fingerprint:
+            meta["committed_listing_fingerprint"] = listing_fingerprint
+            meta["listing_fingerprint"] = listing_fingerprint
+        if response_hash:
+            meta["committed_response_hash"] = response_hash
+            meta["response_hash"] = response_hash
+        if etag:
+            meta["committed_etag"] = etag
+            meta["etag"] = etag
+        if last_modified:
+            meta["committed_last_modified"] = last_modified
+            meta["last_modified"] = last_modified
+
+        meta["last_baseline_committed_at"] = now
+
+        updated = SourceRecord.from_dict({
+            **src.to_dict(),
             "metadata": meta,
         })
         self.local_sources[source_id] = updated
