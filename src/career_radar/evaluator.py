@@ -14,12 +14,15 @@ from typing import Any, Callable, Dict, Protocol
 
 from .models import (
     CANONICAL_DIMENSIONS,
+    CANONICAL_MARKET_INTELLIGENCE_FIELDS,
+    MARKET_INTELLIGENCE_UNKNOWN,
     VALID_EVIDENCE_STATES,
     VALID_OPPORTUNITY_INTENTS,
     VALID_RECOMMENDATIONS,
     CandidateProfile,
     DimensionEvaluation,
     EvaluationResult,
+    MarketIntelligence,
     OpportunityIntentDecision,
     SourceObservation,
 )
@@ -237,3 +240,91 @@ class IntentValidator:
                 "Missing or blank intent_rationale. Opportunity Intent requires a non-empty rationale string."
             )
         return decision
+
+
+class SemanticMarketIntelligenceEvaluatorProtocol(Protocol):
+    """
+    Protocol defining the Agent semantic decision boundary for WATCH_LEARN Market Intelligence.
+    """
+
+    def __call__(
+        self,
+        profile: CandidateProfile,
+        observation: SourceObservation,
+        evaluation_result: EvaluationResult,
+        intent_decision: OpportunityIntentDecision,
+    ) -> MarketIntelligence:
+        ...
+
+
+def build_market_intelligence_packet(
+    profile: CandidateProfile,
+    observation: SourceObservation,
+    evaluation_result: EvaluationResult,
+    intent_decision: OpportunityIntentDecision,
+) -> Dict[str, Any]:
+    """
+    Assembles a clean, structured evidence packet for an Agent to extract Market Intelligence
+    on a WATCH_LEARN opportunity from first-party announcement evidence.
+    """
+    return {
+        "observation": {
+            "observation_id": observation.observation_id,
+            "announcement_id": observation.announcement_id,
+            "source_id": observation.source_id,
+            "source_name": observation.source_name,
+            "announcement_title": observation.announcement_title,
+            "job_title": observation.job_title,
+            "organization": observation.organization,
+            "location": observation.location,
+            "track": observation.track,
+            "official_url": observation.official_url,
+            "requirements": observation.extracted_requirements,
+            "provenance": observation.provenance,
+        },
+        "eligibility_context": {
+            "final_recommendation": evaluation_result.final_recommendation,
+        },
+        "intent_context": {
+            "opportunity_intent": intent_decision.opportunity_intent,
+            "intent_rationale": intent_decision.intent_rationale,
+        },
+        "canonical_contract": {
+            "canonical_fields": list(CANONICAL_MARKET_INTELLIGENCE_FIELDS),
+            "normalization_rule": (
+                "Missing or unsupported facts must be 'UNKNOWN'. "
+                "Do not speculate or hallucinate missing budget, workflow, deliverables, volume, or revision rules."
+            ),
+        },
+    }
+
+
+class MarketIntelligenceValidator:
+    """
+    Deterministic layer: strictly validates MarketIntelligence structure and normalizes
+    missing/empty/blank/None values to literal 'UNKNOWN' without embedding business heuristics.
+    """
+
+    @staticmethod
+    def validate_and_normalize(
+        intelligence: Any,
+    ) -> MarketIntelligence:
+        if isinstance(intelligence, MarketIntelligence):
+            data = intelligence.to_dict()
+        elif isinstance(intelligence, dict):
+            data = intelligence
+        else:
+            raise ValueError(
+                f"Expected MarketIntelligence instance or dict, got {type(intelligence)}"
+            )
+
+        normalized_fields = {}
+        for f in CANONICAL_MARKET_INTELLIGENCE_FIELDS:
+            val = data.get(f)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                normalized_fields[f] = MARKET_INTELLIGENCE_UNKNOWN
+            else:
+                normalized_fields[f] = str(val).strip()
+
+        return MarketIntelligence(**normalized_fields)
+

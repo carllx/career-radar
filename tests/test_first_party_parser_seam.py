@@ -14,6 +14,7 @@ from career_radar.models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     OpportunityIntentDecision,
     SourceObservation,
 )
@@ -322,11 +323,26 @@ def test_first_party_announcement_to_daily_digest_seam(
         for obs, ev in zip(observations, decisions)
     }
 
+    intel_map = {
+        obs.observation_id: MarketIntelligence(
+            brief="招聘公告岗位事实",
+            deliverables="工作合同",
+            content_type="事业单位专任教师",
+            timeline_volume="长期",
+            revision_quality_rules="事业单位考核",
+            requested_tools_workflow="高校教学",
+            budget_compensation="事业单位待遇",
+            use_case="专任教师",
+        )
+        for obs in observations
+    }
+
     summary = finalize_incremental_run(
         observations=observations,
         resolution_decisions=resolution_decisions,
         evaluation_results=decisions_map,
         intent_decisions=intent_map,
+        market_intelligence_results=intel_map,
         data_dir=tmp_path / ".data",
         reports_dir=tmp_path / "reports",
         run_date="2026-08-15",

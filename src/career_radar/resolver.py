@@ -13,6 +13,7 @@ from .models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     Opportunity,
     OpportunityIntentDecision,
     SourceObservation,
@@ -64,6 +65,7 @@ class EntityResolutionApplier:
         opportunities_map: Dict[str, Opportunity],
         evaluation_result: Optional[EvaluationResult] = None,
         intent_decision: Optional[OpportunityIntentDecision] = None,
+        market_intelligence: Optional[MarketIntelligence] = None,
         current_time: Optional[str] = None,
     ) -> Tuple[Opportunity, str]:
         """
@@ -105,6 +107,10 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'update' requires a valid re-evaluated OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+                raise ValueError(
+                    f"EntityResolution 'update' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
+                )
 
             target_opp = opportunities_map[target_id]
             target_opp.observations.append(observation)
@@ -119,6 +125,7 @@ class EntityResolutionApplier:
             target_opp.latest_evaluation = evaluation_result
             target_opp.opportunity_intent = intent_decision.opportunity_intent
             target_opp.intent_rationale = intent_decision.intent_rationale
+            target_opp.market_intelligence = market_intelligence if intent_decision.opportunity_intent == "WATCH_LEARN" else None
             target_opp.updated_at = current_time
             return target_opp, "updated_opportunity"
 
@@ -130,6 +137,10 @@ class EntityResolutionApplier:
             if not intent_decision:
                 raise ValueError(
                     f"EntityResolution 'different' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
+                )
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+                raise ValueError(
+                    f"EntityResolution 'different' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
                 )
 
             new_opp_id = f"opp_{observation.observation_id}"
@@ -147,6 +158,7 @@ class EntityResolutionApplier:
                 updated_at=observation.observed_at or current_time,
                 opportunity_intent=intent_decision.opportunity_intent,
                 intent_rationale=intent_decision.intent_rationale,
+                market_intelligence=market_intelligence if intent_decision.opportunity_intent == "WATCH_LEARN" else None,
             )
             opportunities_map[new_opp_id] = new_opp
             return new_opp, "new_different"
@@ -165,6 +177,10 @@ class EntityResolutionApplier:
                 raise ValueError(
                     f"EntityResolution 'uncertain' requires a valid OpportunityIntentDecision for observation '{observation.observation_id}'. Missing intent decision is strictly prohibited."
                 )
+            if intent_decision.opportunity_intent == "WATCH_LEARN" and not market_intelligence:
+                raise ValueError(
+                    f"EntityResolution 'uncertain' with intent 'WATCH_LEARN' requires a valid MarketIntelligence snapshot for observation '{observation.observation_id}'."
+                )
 
             new_opp_id = f"opp_{observation.observation_id}"
             new_opp = Opportunity(
@@ -182,6 +198,7 @@ class EntityResolutionApplier:
                 uncertain_links=[target_id],
                 opportunity_intent=intent_decision.opportunity_intent,
                 intent_rationale=intent_decision.intent_rationale,
+                market_intelligence=market_intelligence if intent_decision.opportunity_intent == "WATCH_LEARN" else None,
             )
             opportunities_map[new_opp_id] = new_opp
 

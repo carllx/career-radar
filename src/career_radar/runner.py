@@ -12,132 +12,29 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import yaml
 
-from .evaluator import EvaluationValidator, IntentValidator, build_evaluation_packet
-from .extractor import AnnouncementExtractor
-from .fetcher import AnnouncementFetcher, AttachmentAccessError
+from .evaluator import (
+    EvaluationValidator,
+    IntentValidator,
+    MarketIntelligenceValidator,
+    build_evaluation_packet,
+)
+from .extractor import (
+    AnnouncementExtractor,
+    fetch_and_extract_first_party_announcement,
+)
 from .models import (
     CandidateProfile,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     Opportunity,
     OpportunityIntentDecision,
     SourceObservation,
 )
-from .parser import HTMLAnnouncementParser
 from .reporter import DigestReporter
 from .resolver import EntityResolutionApplier, build_entity_resolution_packet
 from .retriever import CandidateRetriever
 from .store import OpportunityStore
-
-
-def fetch_and_extract_first_party_announcement(
-    announcement_url: str,
-    source_id: str,
-    source_name: str,
-    cache_dir: Optional[Path] = None,
-    verify_ssl: bool = True,
-    recruiting_organization: Optional[str] = None,
-) -> Tuple[List[SourceObservation], Dict[str, Any]]:
-    """
-    Fetches a live first-party announcement page, downloads its discovered attachments,
-    and slices them into discrete SourceObservations without business rules.
-    Returns (observations, extraction_report).
-    """
-    cache_dir = cache_dir or Path(".data/announcements")
-    fetcher = AnnouncementFetcher(cache_dir=cache_dir, verify_ssl=verify_ssl)
-    fetched = fetcher.fetch_announcement_html(announcement_url)
-
-    html_parser = HTMLAnnouncementParser()
-    parsed_meta = html_parser.parse(fetched["html_content"], base_url=announcement_url)
-
-    entry_dir = Path(fetched["entry_dir"])
-    downloaded_attachments = []
-    attachment_reports = []
-
-    for att in parsed_meta["attachments"]:
-        if not att.get("supported", True):
-            attachment_reports.append({
-                "name": att.get("name"),
-                "url": att.get("url"),
-                "extension": att.get("extension"),
-                "status": "unsupported_legacy_format",
-                "error": f"Legacy format {att.get('extension')} is not supported.",
-            })
-            continue
-
-        try:
-            local_att = fetcher.download_attachment(
-                att["url"], entry_dir=entry_dir, attachment_meta=att
-            )
-            downloaded_attachments.append(local_att)
-            attachment_reports.append({
-                "name": att.get("name"),
-                "url": att.get("url"),
-                "extension": att.get("extension"),
-                "status": "downloaded",
-                "local_path": str(local_att),
-            })
-        except AttachmentAccessError as e:
-            attachment_reports.append({
-                "name": att.get("name"),
-                "url": att.get("url"),
-                "extension": att.get("extension"),
-                "status": e.reason,
-                "error": str(e),
-            })
-        except Exception as e:
-            attachment_reports.append({
-                "name": att.get("name"),
-                "url": att.get("url"),
-                "extension": att.get("extension"),
-                "status": "download_failed",
-                "error": str(e),
-            })
-
-    extractor = AnnouncementExtractor(cache_dir=cache_dir)
-    observations = extractor.extract_from_html_and_attachments(
-        html_content=fetched["html_content"],
-        source_url=announcement_url,
-        source_id=source_id,
-        source_name=source_name,
-        local_attachment_paths=downloaded_attachments,
-        recruiting_organization=recruiting_organization,
-        observed_at=fetched.get("fetched_at"),
-    )
-
-    has_captcha = any(r.get("status") == "blocked_by_captcha" for r in attachment_reports)
-    has_type_mismatch = any(r.get("status") == "content_type_mismatch" for r in attachment_reports)
-
-    if has_captcha:
-        extraction_completeness = "incomplete"
-        attachment_access = "blocked_by_captcha"
-    elif has_type_mismatch:
-        extraction_completeness = "incomplete"
-        attachment_access = "content_type_mismatch"
-    elif downloaded_attachments and not observations:
-        extraction_completeness = "incomplete_or_no_jobs"
-        attachment_access = "success"
-    elif not downloaded_attachments and parsed_meta["attachments"]:
-        extraction_completeness = "incomplete"
-        attachment_access = "failed"
-    else:
-        extraction_completeness = "complete" if observations else "no_attachments"
-        attachment_access = "success" if downloaded_attachments else "none"
-
-    report = {
-        "announcement_title": parsed_meta["title"],
-        "source_url": announcement_url,
-        "source_id": source_id,
-        "source_name": source_name,
-        "recruiting_organization": recruiting_organization,
-        "verify_ssl": verify_ssl,
-        "attachment_access": attachment_access,
-        "extraction_completeness": extraction_completeness,
-        "attachments": attachment_reports,
-        "observations_count": len(observations),
-    }
-
-    return observations, report
 
 
 class IncrementalResolutionSession:
@@ -182,6 +79,7 @@ class IncrementalResolutionSession:
         decision: EntityResolutionDecision,
         evaluation_result: Optional[EvaluationResult] = None,
         intent_decision: Optional[OpportunityIntentDecision] = None,
+        market_intelligence: Optional[MarketIntelligence] = None,
         current_time: Optional[str] = None,
     ) -> Tuple[Opportunity, str]:
         """
@@ -196,12 +94,17 @@ class IncrementalResolutionSession:
         if intent_decision:
             validated_intent = IntentValidator.validate(intent_decision)
 
+        validated_intel = None
+        if market_intelligence:
+            validated_intel = MarketIntelligenceValidator.validate_and_normalize(market_intelligence)
+
         opp, action = self.applier.apply_decision(
             observation=observation,
             decision=decision,
             opportunities_map=self.working_map,
             evaluation_result=validated_eval,
             intent_decision=validated_intent,
+            market_intelligence=validated_intel,
             current_time=current_time or datetime.now().isoformat(),
         )
 
@@ -347,6 +250,7 @@ def finalize_incremental_run(
     resolution_decisions: List[EntityResolutionDecision],
     evaluation_results: Dict[str, EvaluationResult],
     intent_decisions: Optional[Dict[str, OpportunityIntentDecision]] = None,
+    market_intelligence_results: Optional[Dict[str, MarketIntelligence]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
@@ -366,11 +270,17 @@ def finalize_incremental_run(
             intent_res = intent_decisions.get(obs.observation_id) or (
                 intent_decisions.get(decision.target_opportunity_id) if decision.target_opportunity_id else None
             )
+        intel_res = None
+        if market_intelligence_results:
+            intel_res = market_intelligence_results.get(obs.observation_id) or (
+                market_intelligence_results.get(decision.target_opportunity_id) if decision.target_opportunity_id else None
+            )
         session.stage_decision(
             observation=obs,
             decision=decision,
             evaluation_result=eval_res,
             intent_decision=intent_res,
+            market_intelligence=intel_res,
             current_time=datetime.now().isoformat(),
         )
     return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
@@ -380,6 +290,7 @@ def finalize_evaluation_run(
     observations: List[SourceObservation],
     evaluation_results: List[EvaluationResult],
     intent_results: Optional[List[OpportunityIntentDecision]] = None,
+    market_intelligence_results: Optional[List[MarketIntelligence]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
@@ -399,11 +310,15 @@ def finalize_evaluation_run(
     intent_map = {}
     if intent_results:
         intent_map = {obs.observation_id: it for obs, it in zip(observations, intent_results)}
+    intel_map = {}
+    if market_intelligence_results:
+        intel_map = {obs.observation_id: mi for obs, mi in zip(observations, market_intelligence_results)}
     return finalize_incremental_run(
         observations=observations,
         resolution_decisions=default_decisions,
         evaluation_results=eval_map,
         intent_decisions=intent_map if intent_results else None,
+        market_intelligence_results=intel_map if market_intelligence_results else None,
         data_dir=data_dir,
         reports_dir=reports_dir,
         run_date=run_date,
@@ -415,6 +330,7 @@ def run_radar_pipeline(
     observations_source: Union[str, Path, List[Dict[str, Any]], List[SourceObservation]],
     evaluator_fn: Callable[[CandidateProfile, SourceObservation], EvaluationResult],
     intent_evaluator_fn: Optional[Callable[[CandidateProfile, SourceObservation, EvaluationResult], OpportunityIntentDecision]] = None,
+    market_intelligence_evaluator_fn: Optional[Callable[[CandidateProfile, SourceObservation, EvaluationResult, OpportunityIntentDecision], MarketIntelligence]] = None,
     entity_resolver_fn: Optional[Callable[[SourceObservation, List[Opportunity]], EntityResolutionDecision]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
@@ -459,6 +375,7 @@ def run_radar_pipeline(
 
         eval_res = None
         intent_res = None
+        intel_res = None
         if decision.resolution in ("different", "update", "uncertain"):
             if not evaluator_fn:
                 raise ValueError(
@@ -475,6 +392,17 @@ def run_radar_pipeline(
                     f"intent_evaluator_fn returned None for {decision.resolution} on observation '{obs.observation_id}'. A valid OpportunityIntentDecision is required."
                 )
 
-        session.stage_decision(obs, decision, eval_res, intent_res)
+            if intent_res.opportunity_intent == "WATCH_LEARN":
+                if not market_intelligence_evaluator_fn:
+                    raise ValueError(
+                        f"Missing required market_intelligence_evaluator_fn for WATCH_LEARN on observation '{obs.observation_id}'"
+                    )
+                intel_res = market_intelligence_evaluator_fn(profile, obs, eval_res, intent_res)
+                if not intel_res:
+                    raise ValueError(
+                        f"market_intelligence_evaluator_fn returned None for WATCH_LEARN on observation '{obs.observation_id}'"
+                    )
+
+        session.stage_decision(obs, decision, eval_res, intent_res, intel_res)
 
     return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)

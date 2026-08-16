@@ -74,11 +74,17 @@ class DigestReporter:
             or o.uncertain_links
         ]
 
+        watch_learn_opps = [
+            o
+            for o in target_opps
+            if o.opportunity_intent == "WATCH_LEARN" and o.market_intelligence is not None
+        ]
+
         lines = [
             f"# Career Radar 每日求职情报简报 ({run_date})",
             "",
             f"> **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
-            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 资格建议关注：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
+            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 资格建议关注：{len(recommended)} 个 | 待确认：{len(review_needed)} 个 | 情报观察：{len(watch_learn_opps)} 个",
             "",
             "---",
             "",
@@ -91,6 +97,19 @@ class DigestReporter:
         else:
             for opp in recommended:
                 lines.extend(self._format_opportunity_block(opp))
+
+        lines.extend([
+            "---",
+            "",
+            "## 🔭 WATCH_LEARN / 市场情报观察",
+            "",
+        ])
+
+        if not watch_learn_opps:
+            lines.append("本次巡检无新增或更新的情报观察 (WATCH_LEARN) 机会。\n")
+        else:
+            for opp in watch_learn_opps:
+                lines.extend(self._format_market_intelligence_block(opp))
 
         lines.extend([
             "---",
@@ -198,3 +217,31 @@ class DigestReporter:
                 )
         lines.append("")
         return lines
+
+    def _format_market_intelligence_block(self, opp: Opportunity) -> List[str]:
+        lines = [
+            f"### [{opp.canonical_job_title}]({opp.official_url})",
+            f"- **用人单位**：{opp.organization}",
+            f"- **地点/赛道**：{opp.location} | {opp.track}",
+            f"- **资格结论**：`{opp.latest_evaluation.final_recommendation if opp.latest_evaluation else '待评定'}`",
+            f"- **行动意图**：`WATCH_LEARN / 情报观测`",
+        ]
+        if opp.intent_rationale:
+            lines.append(f"- **意图理由**：{opp.intent_rationale}")
+
+        intel = opp.market_intelligence
+        if intel:
+            lines.extend([
+                "- **市场情报观察 (Market Intelligence)**：",
+                f"  - **Brief**：{intel.brief}",
+                f"  - **Deliverables**：{intel.deliverables}",
+                f"  - **Content Type**：{intel.content_type}",
+                f"  - **Timeline / Volume**：{intel.timeline_volume}",
+                f"  - **Revision / Quality Rules**：{intel.revision_quality_rules}",
+                f"  - **Requested Tools / Workflow**：{intel.requested_tools_workflow}",
+                f"  - **Budget / Compensation**：{intel.budget_compensation}",
+                f"  - **Use Case**：{intel.use_case}",
+            ])
+        lines.append("")
+        return lines
+

@@ -32,6 +32,55 @@ VALID_RECOMMENDATIONS = {"建议关注", "需要人工确认", "明显不符合"
 VALID_RESOLUTION_OUTCOMES = {"same", "update", "different", "uncertain"}
 VALID_OPPORTUNITY_INTENTS = {"APPLY_NOW", "CONDITIONAL", "WATCH_LEARN"}
 
+CANONICAL_MARKET_INTELLIGENCE_FIELDS = (
+    "brief",
+    "deliverables",
+    "content_type",
+    "timeline_volume",
+    "revision_quality_rules",
+    "requested_tools_workflow",
+    "budget_compensation",
+    "use_case",
+)
+MARKET_INTELLIGENCE_UNKNOWN = "UNKNOWN"
+
+
+@dataclass
+class MarketIntelligence:
+    brief: str = MARKET_INTELLIGENCE_UNKNOWN
+    deliverables: str = MARKET_INTELLIGENCE_UNKNOWN
+    content_type: str = MARKET_INTELLIGENCE_UNKNOWN
+    timeline_volume: str = MARKET_INTELLIGENCE_UNKNOWN
+    revision_quality_rules: str = MARKET_INTELLIGENCE_UNKNOWN
+    requested_tools_workflow: str = MARKET_INTELLIGENCE_UNKNOWN
+    budget_compensation: str = MARKET_INTELLIGENCE_UNKNOWN
+    use_case: str = MARKET_INTELLIGENCE_UNKNOWN
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "brief": self.brief,
+            "deliverables": self.deliverables,
+            "content_type": self.content_type,
+            "timeline_volume": self.timeline_volume,
+            "revision_quality_rules": self.revision_quality_rules,
+            "requested_tools_workflow": self.requested_tools_workflow,
+            "budget_compensation": self.budget_compensation,
+            "use_case": self.use_case,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MarketIntelligence":
+        return cls(
+            brief=str(data.get("brief") or MARKET_INTELLIGENCE_UNKNOWN),
+            deliverables=str(data.get("deliverables") or MARKET_INTELLIGENCE_UNKNOWN),
+            content_type=str(data.get("content_type") or MARKET_INTELLIGENCE_UNKNOWN),
+            timeline_volume=str(data.get("timeline_volume") or MARKET_INTELLIGENCE_UNKNOWN),
+            revision_quality_rules=str(data.get("revision_quality_rules") or MARKET_INTELLIGENCE_UNKNOWN),
+            requested_tools_workflow=str(data.get("requested_tools_workflow") or MARKET_INTELLIGENCE_UNKNOWN),
+            budget_compensation=str(data.get("budget_compensation") or MARKET_INTELLIGENCE_UNKNOWN),
+            use_case=str(data.get("use_case") or MARKET_INTELLIGENCE_UNKNOWN),
+        )
+
 
 @dataclass
 class OpportunityIntentDecision:
@@ -313,6 +362,7 @@ class Opportunity:
     uncertain_links: List[str] = field(default_factory=list)
     opportunity_intent: Optional[str] = None
     intent_rationale: Optional[str] = None
+    market_intelligence: Optional[MarketIntelligence] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Opportunity":
@@ -341,6 +391,8 @@ class Opportunity:
                 )
 
         eval_result = EvaluationResult.from_dict(data["latest_evaluation"])
+        raw_intel = data.get("market_intelligence")
+        intel_obj = MarketIntelligence.from_dict(raw_intel) if raw_intel else None
         return cls(
             opportunity_id=data["opportunity_id"],
             canonical_job_title=data.get("job_title", data.get("canonical_job_title", "")),
@@ -358,6 +410,7 @@ class Opportunity:
             uncertain_links=data.get("uncertain_links", []),
             opportunity_intent=data.get("opportunity_intent"),
             intent_rationale=data.get("intent_rationale"),
+            market_intelligence=intel_obj,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -383,4 +436,6 @@ class Opportunity:
             res["opportunity_intent"] = self.opportunity_intent
         if self.intent_rationale is not None:
             res["intent_rationale"] = self.intent_rationale
+        if self.market_intelligence is not None:
+            res["market_intelligence"] = self.market_intelligence.to_dict()
         return res

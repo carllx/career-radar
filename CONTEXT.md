@@ -32,6 +32,23 @@ Agent 针对具体 `Opportunity` 输出的当前行动姿态决策，包含三�
 ### Intent Rationale（意图裁决理由）
 Agent 在输出 `Opportunity Intent` 时所提供的简明决策依据，解释为何结合岗位具体条件与候选人偏好确定该行动意图。
 
+### Market Intelligence（市场情报观察）
+附加于 `opportunity_intent == "WATCH_LEARN"` 机会之上的结构化商业需求与技术事实快照。由 Agent 语义层直接从第一方公告与附件证据中提取，包含 8 大标准事实。市场情报观察用于帮助用户洞察外部商业标杆与技能要求，**绝不修改资格准入结论（Eligibility），亦不作为候选人已掌握该项能力的证明**。
+
+### Market Intelligence Field（市场情报字段）
+市场情报快照中包含的 8 大标准事实类别之一：
+1. `brief`（项目/岗位核心简述与背景）
+2. `deliverables`（交付物清单）
+3. `content_type`（内容资产类别或岗位类型）
+4. `timeline_volume`（周期排期、体量与交付节奏）
+5. `revision_quality_rules`（修改轮次、验收标准与质量门槛）
+6. `requested_tools_workflow`（要求工具链、软件与工作流）
+7. `budget_compensation`（预算区间、报酬标准或薪酬）
+8. `use_case`（成果应用场景与落地方向）
+
+### Market Intelligence UNKNOWN（市场情报未提及事实）
+第一方招聘/采购证据未明确提供某项市场情报事实时的标准字面量标记（`UNKNOWN`）。表明源公告未阐述该项事实，并非负面证据，亦与资格评估中的 `Evidence State UNKNOWN`（单项维度因信息缺失需人工核实）严格解耦。
+
 ### Location Priority（地域优先级）
 工作地点匹配层级（如 `P1 核心目标区域`、`P2 周边通勤圈`、`P3 拓展区域`），用于呈现排序与关注度标记。
 

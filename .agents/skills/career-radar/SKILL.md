@@ -49,16 +49,33 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 > 2. `Opportunity Intent` 由 Agent 语义层依据岗位具体条件与候选人偏好综合裁决；
 > 3. 意图吸引力**绝不可篡改**资格评定结论（`Eligibility FAIL` 依然保持 `明显不符合`）。
 
-### 1.4 概念解耦原则 (Semantic Independence)
+### 1.4 市场情报观察 8 大标准事实 (8 Canonical Market Intelligence Facts)
+针对 `opportunity_intent == "WATCH_LEARN"` 的情报观测机会，Agent 语义层必须从第一方公告与附件证据中提取且仅提取以下 8 项事实：
+1. **`brief`**：项目/岗位核心简述与业务背景；
+2. **`deliverables`**：明确交付物清单；
+3. **`content_type`**：内容资产类别或岗位类型；
+4. **`timeline_volume`**：周期排期、体量与交付节奏；
+5. **`revision_quality_rules`**：修改轮次、验收标准与质量门槛；
+6. **`requested_tools_workflow`**：要求掌握或使用的工具链、软件与工作流；
+7. **`budget_compensation`**：预算区间、报酬标准或岗位薪酬；
+8. **`use_case`**：成果应用场景或业务落地方向。
+
+> [!IMPORTANT]
+> **真实证据与 UNKNOWN 规范**：
+> 1. 第一方证据未提及的事实，值必须为字面量 **`UNKNOWN`**（严禁凭空脑补或外推预算、工具链、交付节奏或修改规则）；
+> 2. 市场需求中提及的技能并不等同于候选人已掌握该技能（`Learning Targets != Proven Capabilities`），市场情报**绝不反向篡改**候选人的 `Capability Fit` 资格结论。
+
+### 1.5 概念解耦原则 (Semantic Independence)
 - **Entity Resolution `uncertain`**：实体同一性存疑（跨渠道两篇公告是否属于同一用人单位同一岗位存疑，建立双向 soft link，不污染资格维度）；
-- **Dimension `UNKNOWN` / `REVIEW`**：单项维度事实或证据的不确定性；
+- **Dimension `UNKNOWN` / `REVIEW`**：单项资格维度事实或证据的不确定性；
 - **Final Recommendation `需要人工确认`**：多维综合研判后的资格准入分级；
-- **Opportunity Intent `CONDITIONAL` / `WATCH_LEARN`**：针对该具体机会的行动与跟进策略。
-四者严格解耦，独立表达。
+- **Opportunity Intent `CONDITIONAL` / `WATCH_LEARN`**：针对该具体机会的行动与跟进策略；
+- **Market Intelligence `UNKNOWN`**：第一方来源未记载某项市场事实（非负面证据，亦非资格不确定性）。
+五者严格解耦，独立表达。
 
 ---
 
-## 2. Agent 端到端编排工作流 (13-Step Workflow)
+## 2. Agent 端到端编排工作流 (14-Step Workflow)
 
 ### 步骤 1：加载候选人画像与运行状态
 - 读取 `profile.local.yaml`（若缺失则回退 `config/profile.example.yaml`）；
@@ -94,7 +111,7 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 
 ### 步骤 8：Agent 实体消歧裁决 (Entity Resolution)
 - Agent 作为唯一语义权威，依据岗位信息研判四态：
-  - `same`：同一岗位多渠道观测，合并历史，继承既有意图，不重复通知；
+  - `same`：同一岗位多渠道观测，合并历史，继承既有意图与市场情报，不重复通知；
   - `update`：历史岗位发布补充公告或延期，记录 Diff 摘要并触发增量重评；
   - `different`：新建独立 Opportunity 实体；
   - `uncertain`：存疑不激进误合并，创建独立实体并建立双向 `uncertain_links`。
@@ -110,17 +127,26 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
   - 结合岗位具体条件（用人单位性质、工作自主权、薪资待遇、排期冲突等）与候选人偏好（`benefit_preferences`, `engagement_preferences`, `compensation_preferences`, `availability_constraints`）；
   - 输出标准意图：`APPLY_NOW` / `CONDITIONAL` / `WATCH_LEARN` 与 `intent_rationale`。
 
-### 步骤 11：Single-Shot 独立文件原子写入 (Persistence)
-- 调用 Helper 写入 `.data/opportunities.jsonl`（包含资格结论与行动意图，采用写入临时文件后重命名替换，保证单文件原子性与不损坏）；
+### 步骤 11：Agent 市场情报语义提取 (Market Intelligence Extraction for WATCH_LEARN)
+- 若岗位的最终行动意图裁决为 **`WATCH_LEARN`**：
+  - Agent 依据第一方公告/附件证据提取 8 大标准市场事实（`brief`, `deliverables`, `content_type`, `timeline_volume`, `revision_quality_rules`, `requested_tools_workflow`, `budget_compensation`, `use_case`）；
+  - 未提及事实输出字面量 `UNKNOWN`；
+  - 生成 `MarketIntelligence` 事实快照。
+- 若意图为 `APPLY_NOW` 或 `CONDITIONAL`，无需执行市场情报提取。
+
+### 步骤 12：Single-Shot 独立文件原子写入 (Persistence)
+- 调用 Helper 写入 `.data/opportunities.jsonl`（包含资格结论、行动意图及 WATCH_LEARN 市场情报快照，采用临时文件后重命名替换，保证单文件原子性与不损坏）；
 - 调用 Helper 写入本地渠道状态至 `.data/sources.json`（同样采用临时文件重命名原子替换）；
 - 校验失败则在写入前 Fail Fast。各状态文件独立维护，不依赖跨文件分布式事务。
 
-### 步骤 12：数据驱动渲染每日简报 (Daily Digest)
-- 生成 `reports/YYYY-MM-DD.md`，完整呈现四大板块：
+### 步骤 13：数据驱动渲染每日简报 (Daily Digest)
+- 生成 `reports/YYYY-MM-DD.md`，完整呈现核心板块：
   - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由）
-  - 🔄 **重点岗位动态变更**（直达本次变更的最新 SourceObservation URL）
+  - 🔭 **WATCH_LEARN / 市场情报观察**（高信噪比呈现 8 项市场事实；缺失项清晰标明 `UNKNOWN`）
   - ⚠️ **需要人工确认**（标注 `【实体同一性待确认】` 与存疑维度）
+  - 🔄 **重点岗位动态变更**（直达本次变更的最新 SourceObservation URL）
   - 🌐 **渠道网络变动**（真实数据驱动呈现新发现渠道与降级渠道；若无变动则写“本轮无渠道网络状态变化。”）
 
-### 步骤 13：输出 IDE 对话高信噪比摘要
+### 步骤 14：输出 IDE 对话高信噪比摘要
 - 在聊天窗口中为用户呈现巡检总结：实际监控源数量、新发现渠道、新增岗位数（资格建议关注数、待确认数）以及行动意图分布（即刻行动、条件关注、情报观测）。
+

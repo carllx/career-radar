@@ -8,6 +8,7 @@ from career_radar.models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     OpportunityIntentDecision,
     SourceObservation,
 )
@@ -131,6 +132,24 @@ class FakeAgentIntentEvaluator:
                 opportunity_intent="WATCH_LEARN",
                 intent_rationale="理论物理岗位不匹配，保留为情报观察",
             )
+
+
+class FakeAgentMarketIntelligenceEvaluator:
+    """Test double for Agent Market Intelligence Semantic Seam."""
+
+    def __call__(
+        self, profile: CandidateProfile, observation: SourceObservation, evaluation_result: EvaluationResult, intent_decision: OpportunityIntentDecision
+    ) -> MarketIntelligence:
+        return MarketIntelligence(
+            brief="基础学科高层次领军人才招聘公告",
+            deliverables="全职教授岗位聘任合同与科研任务书",
+            content_type="高校高层次人才岗位",
+            timeline_volume="长期有效",
+            revision_quality_rules="国家级人才计划入选者标准考核",
+            requested_tools_workflow="高校科研教学体系",
+            budget_compensation="面议提供年薪与安家费",
+            use_case="高层次学科带头人",
+        )
 
 
 @pytest.fixture
@@ -262,6 +281,7 @@ def test_career_radar_highest_seam_full_run(mock_radar_env):
         observations_source=mock_radar_env["observations_fixture_path"],
         evaluator_fn=evaluator,
         intent_evaluator_fn=FakeAgentIntentEvaluator(),
+        market_intelligence_evaluator_fn=FakeAgentMarketIntelligenceEvaluator(),
         entity_resolver_fn=fake_entity_resolver,
         data_dir=mock_radar_env["data_dir"],
         reports_dir=mock_radar_env["reports_dir"],

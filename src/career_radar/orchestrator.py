@@ -23,6 +23,7 @@ from .models import (
     CandidateProfile,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     Opportunity,
     OpportunityIntentDecision,
     SourceObservation,
@@ -100,6 +101,9 @@ class RadarOrchestrator:
         intent_evaluator_fn: Optional[
             Callable[[CandidateProfile, SourceObservation, EvaluationResult], OpportunityIntentDecision]
         ] = None,
+        market_intelligence_evaluator_fn: Optional[
+            Callable[[CandidateProfile, SourceObservation, EvaluationResult, OpportunityIntentDecision], MarketIntelligence]
+        ] = None,
         run_date: Optional[str] = None,
     ) -> RadarRunOutcome:
         """
@@ -149,6 +153,7 @@ class RadarOrchestrator:
 
             eval_res = None
             intent_res = None
+            intel_res = None
             if decision.resolution in ("different", "update", "uncertain"):
                 if not evaluator_fn:
                     raise ValueError(
@@ -165,7 +170,18 @@ class RadarOrchestrator:
                         f"intent_evaluator_fn returned None for {decision.resolution} on observation '{obs.observation_id}'. A valid OpportunityIntentDecision is required."
                     )
 
-            session.stage_decision(obs, decision, eval_res, intent_res)
+                if intent_res.opportunity_intent == "WATCH_LEARN":
+                    if not market_intelligence_evaluator_fn:
+                        raise ValueError(
+                            f"Missing required market_intelligence_evaluator_fn for WATCH_LEARN on observation '{obs.observation_id}'"
+                        )
+                    intel_res = market_intelligence_evaluator_fn(profile, obs, eval_res, intent_res)
+                    if not intel_res:
+                        raise ValueError(
+                            f"market_intelligence_evaluator_fn returned None for WATCH_LEARN on observation '{obs.observation_id}'. A valid MarketIntelligence snapshot is required."
+                        )
+
+            session.stage_decision(obs, decision, eval_res, intent_res, intel_res)
 
         # 4. Atomic Commit of Opportunities and Sources
         network_changes = source_registry.network_changes

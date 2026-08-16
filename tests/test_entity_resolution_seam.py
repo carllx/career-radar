@@ -13,6 +13,7 @@ from career_radar.models import (
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     Opportunity,
     OpportunityIntentDecision,
     SourceObservation,
@@ -358,11 +359,24 @@ def test_entity_resolution_slice_c_different(tmp_path: Path, mock_profile_file: 
             intent_rationale="不同岗位但资格明显不符，保持情报观察",
         )
 
+    def fake_market_intel_evaluator(profile, obs, ev, it):
+        return MarketIntelligence(
+            brief="马院思政专任教师招聘",
+            deliverables="教学与科研任务书",
+            content_type="专任教师岗位",
+            timeline_volume="长期有效",
+            revision_quality_rules="高校标准考核",
+            requested_tools_workflow="高校教学科研",
+            budget_compensation="事业单位待遇",
+            use_case="专任教师",
+        )
+
     res = run_radar_pipeline(
         profile_path=mock_profile_file,
         observations_source=[new_obs],
         evaluator_fn=fake_evaluator,
         intent_evaluator_fn=fake_intent_evaluator,
+        market_intelligence_evaluator_fn=fake_market_intel_evaluator,
         entity_resolver_fn=fake_entity_resolver,
         data_dir=data_dir,
         reports_dir=reports_dir,

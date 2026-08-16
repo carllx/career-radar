@@ -4,16 +4,21 @@ Career Radar - Autonomous career intelligence and recruitment tracking system.
 
 from .evaluator import (
     IntentValidator,
+    MarketIntelligenceValidator,
     build_evaluation_packet,
     build_intent_packet,
+    build_market_intelligence_packet,
 )
 from .models import (
+    CANONICAL_MARKET_INTELLIGENCE_FIELDS,
     CANONICAL_TRACKS,
+    MARKET_INTELLIGENCE_UNKNOWN,
     VALID_OPPORTUNITY_INTENTS,
     CandidateProfile,
     DimensionEvaluation,
     EntityResolutionDecision,
     EvaluationResult,
+    MarketIntelligence,
     Opportunity,
     OpportunityIntentDecision,
     SourceObservation,
@@ -30,18 +35,23 @@ __version__ = "0.1.0"
 
 __all__ = [
     "CANONICAL_TRACKS",
+    "CANONICAL_MARKET_INTELLIGENCE_FIELDS",
+    "MARKET_INTELLIGENCE_UNKNOWN",
     "VALID_OPPORTUNITY_INTENTS",
     "CandidateProfile",
     "DimensionEvaluation",
     "EntityResolutionDecision",
     "EvaluationResult",
+    "MarketIntelligence",
     "Opportunity",
     "OpportunityIntentDecision",
     "SourceObservation",
     "calculate_chronological_age",
     "build_evaluation_packet",
     "build_intent_packet",
+    "build_market_intelligence_packet",
     "IntentValidator",
+    "MarketIntelligenceValidator",
     "RadarOrchestrator",
     "RadarRunOutcome",
     "EntityResolutionApplier",
@@ -54,3 +64,4 @@ __all__ = [
     "SourceRegistry",
     "OpportunityStore",
 ]
+
