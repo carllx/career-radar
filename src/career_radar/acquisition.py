@@ -6,9 +6,10 @@ Establishes:
 1. AcquisitionResult audit contract (mechanically recorded, traceable, hash-addressable);
 2. SourceAcquisitionExecutor for deterministic HTTP acquisition & raw evidence persistence;
 3. Reuses HTMLAnnouncementParser for deterministic structure extraction;
-4. MonitoringFact derivation strictly anchored to AcquisitionResult in production;
-5. Failed technical acquisitions produce failure facts and are excluded from Agent content evidence;
-6. Structural production entrypoint accepting only valid acquisition inputs.
+4. Decoupled stages: network transport -> response observation & raw persistence -> evidence parsing;
+5. Downstream parsing errors never erase already-observed network acquisition facts;
+6. Failed technical acquisitions and parser failures are strictly excluded from Agent content evidence;
+7. Structural production entrypoint accepting only valid acquisition inputs.
 """
 
 from dataclasses import asdict, dataclass
@@ -143,7 +144,6 @@ class SourceAcquisitionExecutor:
         """
         if not raw_bytes:
             return ""
-        # Check declared charset in header
         if "charset=" in declared_content_type.lower():
             charset = declared_content_type.lower().split("charset=")[-1].split(";")[0].strip("\"' ")
             try:
@@ -151,13 +151,11 @@ class SourceAcquisitionExecutor:
             except (LookupError, UnicodeDecodeError):
                 pass
 
-        # Try UTF-8 first
         try:
             return raw_bytes.decode("utf-8")
         except UnicodeDecodeError:
             pass
 
-        # Fallback to charset_normalizer
         try:
             detected = charset_normalizer.from_bytes(raw_bytes).best()
             if detected and detected.encoding:
@@ -165,7 +163,6 @@ class SourceAcquisitionExecutor:
         except Exception:
             pass
 
-        # Fallback to GB18030 / GBK for Chinese institutions
         try:
             return raw_bytes.decode("gb18030", errors="replace")
         except Exception:
@@ -174,38 +171,75 @@ class SourceAcquisitionExecutor:
     def acquire_source(self, source: SourceRecord) -> SourceAcquisitionSessionResult:
         """
         Acquires a single source record, persists evidence, and derives monitoring fact.
+        Guarantees that later parser failures do not erase observed network acquisition facts.
         """
         attempt_id = f"acq_{uuid.uuid4().hex[:12]}"
         now_iso = datetime.now().isoformat()
         requested_url = source.base_url
 
+        # Stage 1: Network Transport
         try:
             resp = self._execute_http_get(requested_url)
-            status_code = getattr(resp, "status_code", 200)
-            final_url = str(getattr(resp, "url", requested_url) or requested_url)
-            headers = dict(getattr(resp, "headers", {}) or {})
-            content_type = headers.get("Content-Type", headers.get("content-type", "text/html"))
+        except Exception as transport_err:
+            acq_res = AcquisitionResult(
+                attempt_id=attempt_id,
+                source_id=source.source_id,
+                requested_url=requested_url,
+                final_url=requested_url,
+                timestamp=now_iso,
+                acquisition_method="native_http_get",
+                technical_status="failed",
+                http_status=None,
+                content_type=None,
+                body_length=0,
+                response_hash="",
+                error_facts={
+                    "error": str(transport_err),
+                    "exception_class": type(transport_err).__name__,
+                    "stage": "transport",
+                },
+            )
+            monitoring_fact = MonitoringFact(
+                source_id=source.source_id,
+                technical_status="failed",
+                checked_url=requested_url,
+                checked_at=now_iso,
+                metadata={"attempt_id": attempt_id, "error": str(transport_err)},
+            )
+            return SourceAcquisitionSessionResult(
+                source_id=source.source_id,
+                acquisition_result=acq_res,
+                monitoring_fact=monitoring_fact,
+                raw_evidence_path=None,
+                agent_evidence_packet=None,
+            )
 
-            raw_bytes = getattr(resp, "content", b"")
-            if not raw_bytes and hasattr(resp, "text"):
-                raw_bytes = resp.text.encode("utf-8")
+        # Stage 2: Response Observation & Raw Evidence Persistence
+        status_code = getattr(resp, "status_code", 200)
+        final_url = str(getattr(resp, "url", requested_url) or requested_url)
+        headers = dict(getattr(resp, "headers", {}) or {})
+        content_type = headers.get("Content-Type", headers.get("content-type", "text/html"))
 
-            body_length = len(raw_bytes)
-            response_hash = hashlib.sha256(raw_bytes).hexdigest()
+        raw_bytes = getattr(resp, "content", b"")
+        if not raw_bytes and hasattr(resp, "text"):
+            raw_bytes = resp.text.encode("utf-8")
 
-            if status_code >= 400:
-                technical_status = "failed"
-                error_facts = {"http_status": status_code, "error": f"HTTP {status_code}"}
-            else:
-                technical_status = "success"
-                error_facts = None
+        body_length = len(raw_bytes)
+        response_hash = hashlib.sha256(raw_bytes).hexdigest()
 
-            # Persist raw response for audit/debug
-            source_evidence_dir = self.evidence_dir / source.source_id
-            source_evidence_dir.mkdir(parents=True, exist_ok=True)
-            raw_evidence_file = source_evidence_dir / f"{attempt_id}.html"
-            raw_evidence_file.write_bytes(raw_bytes)
+        # Persist raw response to disk
+        source_evidence_dir = self.evidence_dir / source.source_id
+        source_evidence_dir.mkdir(parents=True, exist_ok=True)
+        raw_evidence_file = source_evidence_dir / f"{attempt_id}.html"
+        raw_evidence_file.write_bytes(raw_bytes)
+        raw_evidence_path = str(raw_evidence_file)
 
+        etag = headers.get("ETag") or headers.get("etag")
+        last_modified = headers.get("Last-Modified") or headers.get("last-modified")
+
+        if status_code >= 400:
+            technical_status = "failed"
+            error_facts = {"http_status": status_code, "error": f"HTTP {status_code}"}
             acq_res = AcquisitionResult(
                 attempt_id=attempt_id,
                 source_id=source.source_id,
@@ -219,88 +253,133 @@ class SourceAcquisitionExecutor:
                 body_length=body_length,
                 response_hash=response_hash,
                 error_facts=error_facts,
-                etag=headers.get("ETag") or headers.get("etag"),
-                last_modified=headers.get("Last-Modified") or headers.get("last-modified"),
+                etag=etag,
+                last_modified=last_modified,
             )
-
-            # Derive MonitoringFact from AcquisitionResult
-            fact_metadata: Dict[str, Any] = {
-                "attempt_id": attempt_id,
-                "response_hash": response_hash,
-                "body_length": body_length,
-                "http_status": status_code,
-            }
-            if error_facts:
-                fact_metadata.update(error_facts)
-
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
                 technical_status=technical_status,
                 checked_url=final_url,
                 checked_at=now_iso,
-                metadata=fact_metadata,
-            )
-
-            # Only construct Agent content evidence for successful acquisitions
-            agent_packet = None
-            if technical_status == "success":
-                html_text = self._decode_html(raw_bytes, content_type)
-                parsed = self.html_parser.parse(html_text, base_url=final_url)
-                full_body = parsed.get("body_text", "")
-                is_truncated = len(full_body) > 3000
-                text_excerpt = full_body[:3000] if is_truncated else full_body
-
-                agent_packet = {
-                    "source_id": source.source_id,
-                    "source_name": source.name,
-                    "url": final_url,
+                metadata={
                     "attempt_id": attempt_id,
                     "response_hash": response_hash,
-                    "raw_evidence_path": str(raw_evidence_file),
-                    "title": parsed.get("title", ""),
-                    "extracted_tables": parsed.get("tables", []),
-                    "headings": parsed.get("headings", []),
-                    "attachments": parsed.get("attachments", []),
-                    "text_excerpt": text_excerpt,
-                    "is_excerpt": is_truncated,
-                    "total_text_length": len(full_body),
-                }
-
+                    "body_length": body_length,
+                    "http_status": status_code,
+                    "error": f"HTTP {status_code}",
+                },
+            )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
                 acquisition_result=acq_res,
                 monitoring_fact=monitoring_fact,
-                raw_evidence_path=str(raw_evidence_file),
-                agent_evidence_packet=agent_packet,
+                raw_evidence_path=raw_evidence_path,
+                agent_evidence_packet=None,
             )
 
-        except Exception as e:
+        # Stage 3: Evidence Parsing (for HTTP 2xx)
+        try:
+            html_text = self._decode_html(raw_bytes, content_type)
+            parsed = self.html_parser.parse(html_text, base_url=final_url)
+            full_body = parsed.get("body_text", "")
+            is_truncated = len(full_body) > 3000
+            text_excerpt = full_body[:3000] if is_truncated else full_body
+
+            agent_packet = {
+                "source_id": source.source_id,
+                "source_name": source.name,
+                "url": final_url,
+                "attempt_id": attempt_id,
+                "response_hash": response_hash,
+                "raw_evidence_path": raw_evidence_path,
+                "title": parsed.get("title", ""),
+                "extracted_tables": parsed.get("tables", []),
+                "headings": parsed.get("headings", []),
+                "attachments": parsed.get("attachments", []),
+                "text_excerpt": text_excerpt,
+                "is_excerpt": is_truncated,
+                "total_text_length": len(full_body),
+            }
+
             acq_res = AcquisitionResult(
                 attempt_id=attempt_id,
                 source_id=source.source_id,
                 requested_url=requested_url,
-                final_url=requested_url,
+                final_url=final_url,
                 timestamp=now_iso,
                 acquisition_method="native_http_get",
-                technical_status="failed",
-                http_status=None,
-                content_type=None,
-                body_length=0,
-                response_hash="",
-                error_facts={"error": str(e), "exception_class": type(e).__name__},
+                technical_status="success",
+                http_status=status_code,
+                content_type=content_type,
+                body_length=body_length,
+                response_hash=response_hash,
+                error_facts=None,
+                etag=etag,
+                last_modified=last_modified,
             )
             monitoring_fact = MonitoringFact(
                 source_id=source.source_id,
-                technical_status="failed",
-                checked_url=requested_url,
+                technical_status="success",
+                checked_url=final_url,
                 checked_at=now_iso,
-                metadata={"attempt_id": attempt_id, "error": str(e)},
+                metadata={
+                    "attempt_id": attempt_id,
+                    "response_hash": response_hash,
+                    "body_length": body_length,
+                    "http_status": status_code,
+                },
             )
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
                 acquisition_result=acq_res,
                 monitoring_fact=monitoring_fact,
-                raw_evidence_path=None,
+                raw_evidence_path=raw_evidence_path,
+                agent_evidence_packet=agent_packet,
+            )
+
+        except Exception as parse_err:
+            # Network acquisition succeeded (200 OK), but deterministic evidence parsing failed.
+            # Preserve all observed network facts, record parsing error, exclude from agent content.
+            parse_error_facts = {
+                "parse_error": str(parse_err),
+                "exception_class": type(parse_err).__name__,
+                "stage": "evidence_parsing",
+            }
+            acq_res = AcquisitionResult(
+                attempt_id=attempt_id,
+                source_id=source.source_id,
+                requested_url=requested_url,
+                final_url=final_url,
+                timestamp=now_iso,
+                acquisition_method="native_http_get",
+                technical_status="failed",
+                http_status=status_code,
+                content_type=content_type,
+                body_length=body_length,
+                response_hash=response_hash,
+                error_facts=parse_error_facts,
+                etag=etag,
+                last_modified=last_modified,
+                metadata={"evidence_parsing_status": "failed"},
+            )
+            monitoring_fact = MonitoringFact(
+                source_id=source.source_id,
+                technical_status="failed",
+                checked_url=final_url,
+                checked_at=now_iso,
+                metadata={
+                    "attempt_id": attempt_id,
+                    "response_hash": response_hash,
+                    "body_length": body_length,
+                    "http_status": status_code,
+                    "parse_error": str(parse_err),
+                },
+            )
+            return SourceAcquisitionSessionResult(
+                source_id=source.source_id,
+                acquisition_result=acq_res,
+                monitoring_fact=monitoring_fact,
+                raw_evidence_path=raw_evidence_path,
                 agent_evidence_packet=None,
             )
 

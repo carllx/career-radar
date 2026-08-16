@@ -8,19 +8,22 @@ Tests verify external behavior of execute_production_acquisition and SourceAcqui
    and every derived MonitoringFact maintains traceable lineage to its AcquisitionResult.
 3. Failed technical acquisitions (404/500/timeout) produce truthful failure facts in AcquisitionResult
    and MonitoringFact, but are strictly excluded from normal Agent content evidence packets.
+4. Regression test: Parser failure after successful HTTP 200 preserves real network facts, retains raw evidence,
+   records parsing failure facts, and excludes from Agent content evidence.
 """
 
 from datetime import datetime
-import json
 from pathlib import Path
 import pytest
 from typing import Any, Dict
+from unittest.mock import patch
 
 from career_radar.acquisition import (
     AcquisitionResult,
     SourceAcquisitionExecutor,
     execute_production_acquisition,
 )
+from career_radar.parser import HTMLAnnouncementParser
 from career_radar.sources import MonitoringFact, SourceRecord
 
 
@@ -291,3 +294,75 @@ def test_failed_technical_acquisition_excluded_from_agent_content_evidence(tmp_p
     assert len(output["agent_evidence_packets"]) == 1
     assert output["agent_evidence_packets"][0]["source_id"] == "valid_source"
     assert output["agent_evidence_packets"][0]["title"] == "正常招聘"
+
+
+def test_parser_failure_preserves_http_200_network_facts_and_excludes_agent_packet(tmp_path: Path):
+    """
+    Browser Finding 1: Parser failure after successful HTTP 200:
+    - preserves actual HTTP status 200;
+    - preserves body length and response hash;
+    - retains raw HTML response file on disk;
+    - records parser failure facts in AcquisitionResult & MonitoringFact;
+    - strictly excludes from normal Agent content evidence (agent_evidence_packets).
+    """
+    target_url = "https://www.example.edu.cn/zp.html"
+    raw_html = "<html><body><h1>招聘启事</h1><p>内容</p></body></html>"
+    transport = FakeHttpTransport(
+        responses={
+            target_url: {
+                "status_code": 200,
+                "text": raw_html,
+                "headers": {"Content-Type": "text/html; charset=utf-8"},
+            }
+        }
+    )
+
+    source = SourceRecord(
+        source_id="crash_parse_source",
+        name="解析异常渠道",
+        base_url=target_url,
+        domain="example.edu.cn",
+    )
+
+    data_dir = tmp_path / ".data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    # Patch HTMLAnnouncementParser.parse to raise an unexpected parsing exception
+    with patch.object(
+        HTMLAnnouncementParser, "parse", side_effect=RuntimeError("Malformed DOM parsing crash")
+    ):
+        output = execute_production_acquisition(
+            sources=[source],
+            data_dir=data_dir,
+            transport=transport,
+        )
+
+    # 1. Verify AcquisitionResult preserves true HTTP 200 network observation facts
+    assert len(output["acquisition_results"]) == 1
+    acq_res = output["acquisition_results"][0]
+    assert acq_res.http_status == 200
+    assert acq_res.body_length == len(raw_html.encode("utf-8"))
+    assert len(acq_res.response_hash) == 64
+    assert acq_res.technical_status == "failed"
+    assert acq_res.error_facts is not None
+    assert acq_res.error_facts["parse_error"] == "Malformed DOM parsing crash"
+    assert acq_res.error_facts["stage"] == "evidence_parsing"
+
+    # 2. Verify raw evidence was retained on disk
+    session_res = output["session_results"][0]
+    assert session_res.raw_evidence_path is not None
+    evidence_file = Path(session_res.raw_evidence_path)
+    assert evidence_file.exists()
+    assert evidence_file.read_text(encoding="utf-8") == raw_html
+
+    # 3. Verify derived MonitoringFact preserves HTTP 200 facts and records parse error
+    assert len(output["monitoring_facts"]) == 1
+    fact = output["monitoring_facts"][0]
+    assert fact.technical_status == "failed"
+    assert fact.metadata["http_status"] == 200
+    assert fact.metadata["response_hash"] == acq_res.response_hash
+    assert fact.metadata["parse_error"] == "Malformed DOM parsing crash"
+
+    # 4. Verify that NO false normal Agent content evidence packet was emitted
+    assert len(output["agent_evidence_packets"]) == 0
+    assert session_res.agent_evidence_packet is None
