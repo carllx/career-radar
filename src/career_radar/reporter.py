@@ -31,6 +31,8 @@ class DigestReporter:
         new_opportunity_ids: Optional[List[str]] = None,
         updated_opportunity_ids: Optional[List[str]] = None,
         network_changes: Optional[List[Dict[str, Any]]] = None,
+        acquisition_gaps: Optional[List[str]] = None,
+        coverage_caveat: Optional[str] = None,
     ) -> Path:
         """
         Renders the daily markdown digest report to reports/YYYY-MM-DD.md.
@@ -108,6 +110,15 @@ class DigestReporter:
             if recommended:
                 lines.append(
                     "本次新增的资格建议关注机会均为情报观察目标，详见下方【🔭 WATCH_LEARN / 市场情报观察】板块。\n"
+                )
+            elif coverage_caveat:
+                lines.append(
+                    f"本轮未成功提取到新增机会。\n\n> ⚠️ **覆盖度提示**：{coverage_caveat}\n"
+                )
+            elif acquisition_gaps:
+                gaps_str = "；".join(acquisition_gaps) if isinstance(acquisition_gaps, list) else str(acquisition_gaps)
+                lines.append(
+                    f"本轮未成功提取到新增机会。\n\n> ⚠️ **覆盖度提示**：{gaps_str}\n"
                 )
             else:
                 lines.append("本次巡检未发现新增高匹配度机会。\n")

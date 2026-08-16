@@ -211,6 +211,19 @@ class SourceRegistry:
         if decision.action == "discover":
             if not decision.base_url or not decision.name:
                 raise ValueError("Source discovery decision requires 'name' and 'base_url'")
+            if not decision.provenance or not isinstance(decision.provenance, dict) or len(decision.provenance) == 0:
+                raise ValueError("Source discovery decision requires 'provenance' containing first-party verification evidence.")
+            has_verification = any(
+                k in decision.provenance
+                for k in (
+                    "verification_url", "source_url", "verified_url", "discovery_channel",
+                    "evidence", "retrieval_evidence", "verified_at", "method", "query"
+                )
+            )
+            if not has_verification:
+                raise ValueError(
+                    "Source discovery decision provenance must contain first-party verification evidence (e.g. 'verification_url' or 'evidence')."
+                )
             domain = decision.domain or (decision.base_url.split("//")[-1].split("/")[0] if "//" in decision.base_url else decision.base_url)
             rec = SourceRecord(
                 source_id=decision.source_id,
@@ -224,7 +237,7 @@ class SourceRegistry:
                 origin="discovered",
                 lifecycle_status="discovered",
                 discovered_at=now,
-                provenance=decision.provenance or {"rationale": decision.rationale},
+                provenance=decision.provenance,
             )
             self.local_sources[decision.source_id] = rec
             self._network_changes.append({

@@ -123,6 +123,8 @@ class IncrementalResolutionSession:
         reports_dir: Union[str, Path] = "reports",
         run_date: Optional[str] = None,
         network_changes: Optional[List[Dict[str, Any]]] = None,
+        acquisition_gaps: Optional[List[str]] = None,
+        coverage_caveat: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Atomically persists the working state to disk and renders the Daily Digest.
@@ -141,6 +143,8 @@ class IncrementalResolutionSession:
             new_opportunity_ids=self.new_opportunity_ids,
             updated_opportunity_ids=self.updated_opportunity_ids,
             network_changes=network_changes,
+            acquisition_gaps=acquisition_gaps,
+            coverage_caveat=coverage_caveat,
         )
 
         recommended_count = sum(
@@ -254,6 +258,9 @@ def finalize_incremental_run(
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
+    network_changes: Optional[List[Dict[str, Any]]] = None,
+    acquisition_gaps: Optional[List[str]] = None,
+    coverage_caveat: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Applies Agent decisions sequentially to in-memory state and persists atomically."""
     if len(observations) != len(resolution_decisions):
@@ -283,7 +290,13 @@ def finalize_incremental_run(
             market_intelligence=intel_res,
             current_time=datetime.now().isoformat(),
         )
-    return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
+    return session.commit_and_finalize(
+        reports_dir=reports_dir,
+        run_date=run_date,
+        network_changes=network_changes,
+        acquisition_gaps=acquisition_gaps,
+        coverage_caveat=coverage_caveat,
+    )
 
 
 def finalize_evaluation_run(
@@ -335,6 +348,9 @@ def run_radar_pipeline(
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
     run_date: Optional[str] = None,
+    network_changes: Optional[List[Dict[str, Any]]] = None,
+    acquisition_gaps: Optional[List[str]] = None,
+    coverage_caveat: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Unified pipeline across highest testing seam with sequential in-memory working state."""
     profile_path = Path(profile_path)
@@ -405,4 +421,10 @@ def run_radar_pipeline(
 
         session.stage_decision(obs, decision, eval_res, intent_res, intel_res)
 
-    return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)
+    return session.commit_and_finalize(
+        reports_dir=reports_dir,
+        run_date=run_date,
+        network_changes=network_changes,
+        acquisition_gaps=acquisition_gaps,
+        coverage_caveat=coverage_caveat,
+    )

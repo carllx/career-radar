@@ -306,6 +306,7 @@ class TestRadarOrchestratorSeam:
             base_url="https://www.gdaib.edu.cn/rsc/",
             source_type="first_party_institution",
             rationale="发现新高职招聘渠道",
+            provenance={"discovery_channel": "agent-reach", "verification_url": "https://www.gdaib.edu.cn/rsc/"},
         )
 
         # 5. Incoming Observations

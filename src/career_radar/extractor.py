@@ -93,21 +93,27 @@ def fetch_and_extract_first_party_announcement(
     has_captcha = any(r.get("status") == "blocked_by_captcha" for r in attachment_reports)
     has_type_mismatch = any(r.get("status") == "content_type_mismatch" for r in attachment_reports)
 
+    html_tables_count = len(parsed_meta.get("tables", []))
+    html_headings_count = len(parsed_meta.get("headings", []))
+
     if has_captcha:
         extraction_completeness = "incomplete"
         attachment_access = "blocked_by_captcha"
     elif has_type_mismatch:
         extraction_completeness = "incomplete"
         attachment_access = "content_type_mismatch"
-    elif downloaded_attachments and not observations:
-        extraction_completeness = "incomplete_or_no_jobs"
-        attachment_access = "success"
     elif not downloaded_attachments and parsed_meta["attachments"]:
         extraction_completeness = "incomplete"
         attachment_access = "failed"
-    else:
-        extraction_completeness = "complete" if observations else "no_attachments"
+    elif observations:
+        extraction_completeness = "complete"
         attachment_access = "success" if downloaded_attachments else "none"
+    elif downloaded_attachments and not observations:
+        extraction_completeness = "incomplete_or_no_jobs"
+        attachment_access = "success"
+    else:
+        extraction_completeness = "no_concrete_roles"
+        attachment_access = "none"
 
     report = {
         "announcement_title": parsed_meta["title"],
@@ -118,6 +124,8 @@ def fetch_and_extract_first_party_announcement(
         "verify_ssl": verify_ssl,
         "attachment_access": attachment_access,
         "extraction_completeness": extraction_completeness,
+        "html_tables_count": html_tables_count,
+        "html_headings_count": html_headings_count,
         "attachments": attachment_reports,
         "observations_count": len(observations),
     }
@@ -155,9 +163,25 @@ class AnnouncementExtractor:
         announcement_id = f"ann_{hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:12]}"
 
         observations: List[SourceObservation] = []
-        attachment_paths = local_attachment_paths or []
 
-        # Parse all attachments
+        # 1. Parse HTML tables if present
+        for t_idx, table in enumerate(parsed_html.get("tables", [])):
+            html_obs = self._extract_observations_from_table(
+                table=table,
+                announcement_id=announcement_id,
+                announcement_title=announcement_title,
+                source_id=source_id,
+                source_name=source_name,
+                source_url=source_url,
+                observed_at=observed_at,
+                recruiting_organization=recruiting_organization,
+                is_html=True,
+                table_idx=t_idx,
+            )
+            observations.extend(html_obs)
+
+        # 2. Parse all attachments
+        attachment_paths = local_attachment_paths or []
         for att_path in attachment_paths:
             try:
                 tables = self.attachment_parser.parse_file(att_path)
@@ -165,94 +189,139 @@ class AnnouncementExtractor:
                 tables = []
 
             for table in tables:
-                rows = table.get("rows", [])
-                for row_data in rows:
-                    cells = row_data.get("cells", {})
-                    row_idx = row_data.get("row_index", 0)
+                att_obs = self._extract_observations_from_table(
+                    table=table,
+                    announcement_id=announcement_id,
+                    announcement_title=announcement_title,
+                    source_id=source_id,
+                    source_name=source_name,
+                    source_url=source_url,
+                    observed_at=observed_at,
+                    recruiting_organization=recruiting_organization,
+                    is_html=False,
+                    att_path=att_path,
+                )
+                observations.extend(att_obs)
 
-                    # Extract job title mechanically from cell headers
-                    job_title = self._find_matching_cell(
-                        cells,
-                        ["岗位名称", "招聘岗位", "岗位", "职位", "工种", "岗位职责任务", "岗位职责"]
-                    )
-                    if not job_title:
-                        # Skip empty rows or rows without an identifiable job title
-                        continue
+        # STRICT RULE: If no table rows were found, DO NOT fabricate fake job from announcement title.
+        return observations
 
-                    # Education & Degree combination
-                    education_req = self._find_matching_cell(cells, ["学历要求", "学历学位要求", "最低学历", "学历"])
-                    degree_req = self._find_matching_cell(cells, ["学位要求", "最低学位", "学位"])
-                    if education_req and degree_req and education_req != degree_req:
-                        education_text = f"{education_req}（{degree_req}）"
-                    else:
-                        education_text = education_req or degree_req
+    def _extract_observations_from_table(
+        self,
+        table: Dict[str, Any],
+        announcement_id: str,
+        announcement_title: str,
+        source_id: str,
+        source_name: str,
+        source_url: str,
+        observed_at: str,
+        recruiting_organization: Optional[str] = None,
+        is_html: bool = False,
+        table_idx: int = 0,
+        att_path: Optional[Path] = None,
+    ) -> List[SourceObservation]:
+        observations = []
+        rows = table.get("rows", [])
+        for row_data in rows:
+            cells = row_data.get("cells", {})
+            row_idx = row_data.get("row_index", 0)
 
-                    # Age combination
-                    age_req = self._find_matching_cell(cells, ["年龄要求", "年龄", "年龄上限"])
-                    relaxed_age = self._find_matching_cell(cells, ["（放宽年龄）硕士研究生年龄要求", "放宽年龄要求", "放宽年龄"])
-                    if age_req and relaxed_age:
-                        age_text = f"{age_req}（放宽：{relaxed_age}）"
-                    else:
-                        age_text = age_req or relaxed_age
+            # Extract job title mechanically from cell headers
+            job_title = self._find_matching_cell(
+                cells,
+                ["岗位名称", "招聘岗位", "岗位", "职位", "工种", "岗位职责任务", "岗位职责"]
+            )
+            if not job_title:
+                continue
 
-                    # Extract discrete requirement texts verbatim from cells
-                    req_dict = {
-                        "age_text": age_text,
-                        "education_text": education_text,
-                        "formal_qualification_text": self._find_matching_cell(
-                            cells,
-                            ["专业及代码", "专业要求", "专业要求(研究生)", "专业要求(本科)", "专业", "学科方向", "专业名称及代码"]
-                        ),
-                        "capability_fit_text": self._find_matching_cell(cells, ["能力要求", "专业技能要求", "专业能力要求", "岗位技能要求"]),
-                        "teaching_experience_text": self._find_matching_cell(cells, ["教学经历", "教学经验", "带教要求", "带教经历"]),
-                        "industry_experience_text": self._find_matching_cell(cells, ["行业经历", "企业经历", "实务经验", "行业背景", "工作经历"]),
-                        "other_conditions_text": self._find_matching_cell(cells, ["其他条件", "其他要求", "招聘条件", "备注", "说明"]),
-                    }
+            # Education & Degree combination
+            education_req = self._find_matching_cell(cells, ["学历要求", "学历学位要求", "最低学历", "学历"])
+            degree_req = self._find_matching_cell(cells, ["学位要求", "最低学位", "学位"])
+            if education_req and degree_req and education_req != degree_req:
+                education_text = f"{education_req}（{degree_req}）"
+            else:
+                education_text = education_req or degree_req
 
-                    # Determine canonical recruiting organization (institution-level)
-                    row_inst = self._find_matching_cell(cells, ["招聘单位", "用人单位", "单位名称", "招聘机构", "用人机构"])
-                    if row_inst:
-                        effective_org = row_inst
-                    elif recruiting_organization:
-                        effective_org = recruiting_organization
-                    else:
-                        effective_org = ""
+            # Age combination
+            age_req = self._find_matching_cell(cells, ["年龄要求", "年龄", "年龄上限"])
+            relaxed_age = self._find_matching_cell(cells, ["（放宽年龄）硕士研究生年龄要求", "放宽年龄要求", "放宽年龄"])
+            if age_req and relaxed_age:
+                age_text = f"{age_req}（放宽：{relaxed_age}）"
+            else:
+                age_text = age_req or relaxed_age
 
-                    # Department / faculty level (preserved in provenance, never confused with organization)
-                    department = self._find_matching_cell(cells, ["工作部门", "用人部门", "学院", "系所", "所属部门", "招聘部门"])
+            # Extract discrete requirement texts verbatim from cells
+            req_dict = {
+                "age_text": age_text,
+                "education_text": education_text,
+                "formal_qualification_text": self._find_matching_cell(
+                    cells,
+                    ["专业及代码", "专业要求", "专业要求(研究生)", "专业要求(本科)", "专业", "学科方向", "专业名称及代码"]
+                ),
+                "capability_fit_text": self._find_matching_cell(cells, ["能力要求", "专业技能要求", "专业能力要求", "岗位技能要求"]),
+                "teaching_experience_text": self._find_matching_cell(cells, ["教学经历", "教学经验", "带教要求", "带教经历"]),
+                "industry_experience_text": self._find_matching_cell(cells, ["行业经历", "企业经历", "实务经验", "行业背景", "工作经历"]),
+                "other_conditions_text": self._find_matching_cell(cells, ["其他条件", "其他要求", "招聘条件", "备注", "说明"]),
+            }
 
-                    # Determine row-level location if present in cells (NO hardcoded location)
-                    location = self._find_matching_cell(cells, ["考区", "工作地点", "地点", "城市", "工作地", "所在校区", "校区"])
+            # Determine canonical recruiting organization (institution-level)
+            row_inst = self._find_matching_cell(cells, ["招聘单位", "用人单位", "单位名称", "招聘机构", "用人机构"])
+            if row_inst:
+                effective_org = row_inst
+            elif recruiting_organization:
+                effective_org = recruiting_organization
+            else:
+                effective_org = ""
 
-                    # Determine row-level canonical track (NO job rank / grade mapping)
-                    track = self._find_matching_cell(cells, ["招聘赛道", "业务赛道", "目标赛道"])
+            # Department / faculty level (preserved in provenance, never confused with organization)
+            department = self._find_matching_cell(cells, ["工作部门", "用人部门", "学院", "系所", "所属部门", "招聘部门"])
 
-                    obs_id = f"obs_{announcement_id}_{att_path.stem}_{row_idx}"
-                    obs = SourceObservation(
-                        observation_id=obs_id,
-                        announcement_id=announcement_id,
-                        source_id=source_id,
-                        source_name=source_name,
-                        announcement_title=announcement_title,
-                        job_title=job_title,
-                        organization=effective_org,
-                        location=location,
-                        track=track,
-                        official_url=source_url,
-                        observed_at=observed_at,
-                        extracted_requirements=req_dict,
-                        provenance={
-                            "source_url": source_url,
-                            "file_name": att_path.name,
-                            "sheet_name": table.get("sheet_name"),
-                            "row_index": row_idx,
-                            "department": department,
-                            "raw_cells": cells,
-                        },
-                    )
-                    observations.append(obs)
+            # Determine row-level location if present in cells (NO hardcoded location)
+            location = self._find_matching_cell(cells, ["考区", "工作地点", "地点", "城市", "工作地", "所在校区", "校区"])
 
-        # STRICT RULE: If no attachment rows were found, DO NOT fabricate fake job from announcement title.
+            # Determine row-level canonical track (NO job rank / grade mapping)
+            track = self._find_matching_cell(cells, ["招聘赛道", "业务赛道", "目标赛道"])
+
+            if is_html:
+                obs_id = f"obs_{announcement_id}_html_{table_idx}_{row_idx}"
+                prov = {
+                    "source_url": source_url,
+                    "evidence_type": "html_table",
+                    "table_index": table.get("table_index", table_idx),
+                    "row_index": row_idx,
+                    "department": department,
+                    "raw_cells": cells,
+                }
+            else:
+                stem = att_path.stem if att_path else "att"
+                file_name = att_path.name if att_path else "attachment"
+                obs_id = f"obs_{announcement_id}_{stem}_{row_idx}"
+                prov = {
+                    "source_url": source_url,
+                    "file_name": file_name,
+                    "sheet_name": table.get("sheet_name"),
+                    "row_index": row_idx,
+                    "department": department,
+                    "raw_cells": cells,
+                }
+
+            obs = SourceObservation(
+                observation_id=obs_id,
+                announcement_id=announcement_id,
+                source_id=source_id,
+                source_name=source_name,
+                announcement_title=announcement_title,
+                job_title=job_title,
+                organization=effective_org,
+                location=location,
+                track=track,
+                official_url=source_url,
+                observed_at=observed_at,
+                extracted_requirements=req_dict,
+                provenance=prov,
+            )
+            observations.append(obs)
+
         return observations
 
     def _find_matching_cell(self, cells: Dict[str, str], candidate_keys: List[str]) -> str:

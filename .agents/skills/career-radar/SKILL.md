@@ -94,17 +94,19 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 
 ### 步骤 4：开放动态渠道发现 (Open Source Discovery)
 - Agent 主动使用环境已批准的能力（Web 搜索、`agent-reach`、第一方官网导航）探索公共种子库之外的潜在招聘渠道（高校/职校人才专栏、新 ATS 等）；
-- 严禁平台硬编码黑名单与侵入式反爬；
+- 搜索结果/摘要仅作为发现线索（Search lead != verified evidence），不能直接作为有效渠道依据；
 - 若本轮未发现合格新渠道，如实记录 0 发现，不得伪造。
 
-### 步骤 5：新渠道真实性核验与本地建档
-- 对发现的候选渠道核验机构真实性、是否具备活跃第一方招聘专栏及直达 URL；
-- 验证通过后由 Agent 签发 `SourceLifecycleDecision(action="discover")` 记录至本地 `.data/sources.json`（标记为 `discovered`，使未来 Run 能够可见该候选源）；
+### 步骤 5：新渠道真实性核验与本地建档 (Source Verification & Lifecycle)
+- 对候选渠道必须实际访问并核验：机构真实性、当前活跃第一方招聘专栏及直达 URL（HTTP 200 不等于有效招聘专栏，维护页/升级页不可建档为可用渠道）；
+- 核验通过后由 Agent 签发 `SourceLifecycleDecision(action="discover")`，**必须在 `provenance` 中携带第一方核验证据**（如 `verification_url`、核验方法与时间戳），记录至本地 `.data/sources.json`；
+- 对已持久化但实际不可用/维护中的渠道，签发 `action="degrade"` 并记录审计理由；
 - **严禁自动篡改公共种子库 `config/sources.seed.json`**。
 
-### 步骤 6：第一方公告与附件切片提取 (Acquisition & Extraction)
-- 对发现的目标招聘公告，调用 `fetch_and_extract_first_party_announcement` 下载并解析附件表格（`.xlsx`、`.docx`、text-native `.pdf`）；
-- 机械切片生成包含原始单元格内容与来源 Provenance 的 `SourceObservation` 列表。
+### 步骤 6：第一方公告、HTML 表格与附件切片提取 (Acquisition & Extraction)
+- 对目标第一方页面，调用 `fetch_and_extract_first_party_announcement` 机械解析 HTML 正文、标题、层级、链接、HTML 表格（`<table>`）以及附件表格（`.xlsx`、`.docx`、text-native `.pdf`）；
+- 若 HTML 表格或附件中包含明确具体岗位行，机械切片生成带有真实 Provenance（`evidence_type`、`raw_cells`、`source_url`）的 `SourceObservation`；
+- **Anti-Hallucination 边界**：若页面仅为泛化招聘宣传（如“欢迎关注招聘信息”）而无具体岗位，必须输出 0 `SourceObservation`，严禁从公告标题凭空捏造岗位。
 
 ### 步骤 7：高召回候选检索 (Candidate Retrieval)
 - 由 Helper `CandidateRetriever` 基于用人单位检索同机构历史 Opportunity 以及同 Run 先前 staged 的实体。
@@ -139,9 +141,9 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 - 调用 Helper 写入本地渠道状态至 `.data/sources.json`（同样采用临时文件重命名原子替换）；
 - 校验失败则在写入前 Fail Fast。各状态文件独立维护，不依赖跨文件分布式事务。
 
-### 步骤 13：数据驱动渲染每日简报 (Daily Digest)
+### 步骤 13：数据驱动渲染每日简报 (Daily Digest Truthfulness)
 - 生成 `reports/YYYY-MM-DD.md`，完整呈现核心板块：
-  - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由）
+  - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由；若本轮因渠道受限或采集缺口导致 0 新增机会，如实提示覆盖度限制，不误导用户）
   - 🔭 **WATCH_LEARN / 市场情报观察**（高信噪比呈现 8 项市场事实；缺失项清晰标明 `UNKNOWN`）
   - ⚠️ **需要人工确认**（标注 `【实体同一性待确认】` 与存疑维度）
   - 🔄 **重点岗位动态变更**（直达本次变更的最新 SourceObservation URL）

@@ -40,7 +40,62 @@ class HTMLAnnouncementParser:
         # 2. Body text extraction
         body_text = soup.get_text(separator="\n", strip=True)
 
-        # 3. Discovered Attachment links
+        # 3. Headings extraction
+        headings = []
+        for h_tag in soup.find_all(re.compile(r"^h[1-6]$", re.I)):
+            h_text = h_tag.get_text(strip=True)
+            if h_text:
+                headings.append({"level": h_tag.name.lower(), "text": h_text})
+
+        # 4. Links extraction
+        links = []
+        for a_tag in soup.find_all("a", href=True):
+            href = a_tag["href"].strip()
+            l_text = a_tag.get_text(strip=True)
+            full_url = urljoin(base_url, href) if base_url else href
+            links.append({"text": l_text, "url": full_url})
+
+        # 5. HTML Table extraction
+        tables = []
+        for t_idx, table_el in enumerate(soup.find_all("table")):
+            rows_data = []
+            for tr in table_el.find_all("tr"):
+                cells = [td.get_text(separator=" ", strip=True) for td in tr.find_all(["th", "td"])]
+                if any(cells):
+                    rows_data.append(cells)
+            if not rows_data:
+                continue
+
+            header_idx = 0
+            headers = []
+            for idx, r in enumerate(rows_data):
+                non_empty = [c for c in r if c]
+                if len(non_empty) >= 2:
+                    header_idx = idx
+                    headers = [c if c else f"col_{i}" for i, c in enumerate(r)]
+                    break
+            if not headers:
+                continue
+
+            parsed_rows = []
+            for row_idx, r in enumerate(rows_data[header_idx + 1:], start=header_idx + 2):
+                if not any(r):
+                    continue
+                cell_dict = {}
+                for col_idx, cell_val in enumerate(r):
+                    if col_idx < len(headers):
+                        cell_dict[headers[col_idx]] = cell_val
+                parsed_rows.append({"row_index": row_idx, "cells": cell_dict})
+
+            tables.append({
+                "file_type": "html_table",
+                "table_index": t_idx,
+                "status": "success",
+                "headers": headers,
+                "rows": parsed_rows,
+            })
+
+        # 6. Discovered Attachment links
         attachments = []
         for a_tag in soup.find_all("a", href=True):
             href = a_tag["href"].strip()
@@ -80,6 +135,9 @@ class HTMLAnnouncementParser:
         return {
             "title": title,
             "body_text": body_text,
+            "headings": headings,
+            "links": links,
+            "tables": tables,
             "attachments": attachments,
         }
 
