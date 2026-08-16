@@ -232,6 +232,7 @@ class SourceRegistry:
         self,
         source_id: str,
         listing_fingerprint: Optional[str] = None,
+        listing_urls: Optional[List[str]] = None,
         response_hash: Optional[str] = None,
         etag: Optional[str] = None,
         last_modified: Optional[str] = None,
@@ -252,6 +253,9 @@ class SourceRegistry:
         if listing_fingerprint:
             meta["committed_listing_fingerprint"] = listing_fingerprint
             meta["listing_fingerprint"] = listing_fingerprint
+        if listing_urls is not None:
+            meta["committed_listing_urls"] = list(listing_urls)
+            meta["listing_urls"] = list(listing_urls)
         if response_hash:
             meta["committed_response_hash"] = response_hash
             meta["response_hash"] = response_hash

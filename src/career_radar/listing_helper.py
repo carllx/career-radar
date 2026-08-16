@@ -8,7 +8,7 @@ from datetime import datetime
 import hashlib
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urljoin
 
 from .acquisition_models import AcquisitionResult
@@ -28,30 +28,10 @@ class ListingAcquisitionHelper:
         source: SourceRecord,
         listing_url: str,
     ) -> Optional[str]:
-        links = listing_parsed.get("links", [])
-        if not links:
-            return None
-        metadata = source.metadata or {}
-
-        # 1. Explicit selector in metadata
-        if metadata.get("detail_url"):
-            return urljoin(listing_url, metadata["detail_url"])
-
-        # 2. Configured regex / pattern hint in metadata
-        pattern_hint = metadata.get("detail_url_pattern") or metadata.get("url_pattern")
-        if pattern_hint:
-            for lk in links:
-                u = lk.get("url", "")
-                if re.search(pattern_hint, u):
-                    return urljoin(listing_url, u)
-
-        # 3. Configured link index
-        link_index = metadata.get("detail_link_index")
-        if link_index is not None and isinstance(link_index, int) and 0 <= link_index < len(links):
-            return links[link_index].get("url")
-
-        # Without an explicit mechanical hint, truthfully return None (do not guess/fall back)
-        return None
+        selected_urls = IncrementalAcquisitionHelper.extract_selected_urls(
+            listing_parsed, source, listing_url
+        )
+        return selected_urls[0] if selected_urls else None
 
     @staticmethod
     def acquire_listing_page(
@@ -99,7 +79,7 @@ class ListingAcquisitionHelper:
                 checked_at=now_iso,
                 metadata={"attempt_id": listing_attempt_id, "error": str(listing_net_err)},
             )
-            return None, acq_res, monitoring_fact, None, False, None
+            return None, acq_res, monitoring_fact, None, False, None, [], []
 
         list_status = getattr(listing_resp, "status_code", 200)
         list_final_url = str(getattr(listing_resp, "url", listing_url) or listing_url)
@@ -134,7 +114,7 @@ class ListingAcquisitionHelper:
                 checked_at=now_iso,
                 metadata={"attempt_id": listing_attempt_id, "http_status": 304, "unchanged": True},
             )
-            return None, listing_acq_res, monitoring_fact, None, True, None
+            return None, listing_acq_res, monitoring_fact, None, True, None, [], []
 
         list_raw_bytes = getattr(listing_resp, "content", b"") or (listing_resp.text.encode("utf-8") if hasattr(listing_resp, "text") else b"")
         list_body_len = len(list_raw_bytes)
@@ -172,18 +152,23 @@ class ListingAcquisitionHelper:
                 checked_at=now_iso,
                 metadata={"attempt_id": listing_attempt_id, "http_status": list_status},
             )
-            return None, listing_acq_res, monitoring_fact, raw_listing_path, False, None
+            return None, listing_acq_res, monitoring_fact, raw_listing_path, False, None, [], []
 
         try:
             listing_html_text = decode_html_fn(list_raw_bytes, list_content_type)
             listing_parsed = html_parser.parse(listing_html_text, base_url=list_final_url)
+            selected_urls = IncrementalAcquisitionHelper.extract_selected_urls(
+                listing_parsed, source, list_final_url
+            )
             observed_fingerprint = IncrementalAcquisitionHelper.compute_listing_fingerprint(
                 listing_parsed, source, list_final_url
             )
             is_unchanged = IncrementalAcquisitionHelper.is_source_unchanged(
                 source, observed_fingerprint=observed_fingerprint, observed_hash=list_hash
             )
-            detail_url = ListingAcquisitionHelper.select_detail_url(listing_parsed, source, list_final_url)
+            committed_urls = (source.metadata or {}).get("committed_listing_urls")
+            new_urls = IncrementalAcquisitionHelper.diff_urls(selected_urls, committed_urls)
+            detail_url = selected_urls[0] if selected_urls else None
         except Exception as parse_list_err:
             listing_acq_res.technical_status = "failed"
             listing_acq_res.error_facts = {"parse_error": str(parse_list_err), "stage": "listing_parsing"}
@@ -194,7 +179,7 @@ class ListingAcquisitionHelper:
                 checked_at=now_iso,
                 metadata={"attempt_id": listing_attempt_id, "parse_error": str(parse_list_err)},
             )
-            return None, listing_acq_res, monitoring_fact, raw_listing_path, False, None
+            return None, listing_acq_res, monitoring_fact, raw_listing_path, False, None, [], []
 
         monitoring_fact = MonitoringFact(
             source_id=source.source_id,
@@ -207,8 +192,60 @@ class ListingAcquisitionHelper:
                 "unchanged": is_unchanged,
                 "observed_fingerprint": observed_fingerprint,
                 "response_hash": list_hash,
+                "selected_urls_count": len(selected_urls),
+                "new_urls_count": len(new_urls),
             },
         )
         listing_acq_res.metadata["observed_fingerprint"] = observed_fingerprint
+        listing_acq_res.metadata["selected_urls"] = selected_urls
+        listing_acq_res.metadata["new_urls"] = new_urls
         listing_acq_res.metadata["unchanged"] = is_unchanged
-        return detail_url, listing_acq_res, monitoring_fact, raw_listing_path, is_unchanged, observed_fingerprint
+        return detail_url, listing_acq_res, monitoring_fact, raw_listing_path, is_unchanged, observed_fingerprint, selected_urls, new_urls
+
+    @staticmethod
+    def acquire_all_details(
+        source: SourceRecord,
+        new_urls: List[str],
+        session_id: str,
+        listing_acq_res: AcquisitionResult,
+        monitoring_fact: MonitoringFact,
+        raw_listing_path: Optional[str],
+        detail_acquirer: Any,
+    ) -> Any:
+        """
+        Acquires every new detail URL mechanically.
+        Maintains strict invariant: failure of ANY new detail prevents full baseline advance.
+        """
+        from .acquisition_models import SourceAcquisitionSessionResult
+
+        all_acq_results: List[AcquisitionResult] = [listing_acq_res]
+        all_agent_packets: List[Dict[str, Any]] = []
+        overall_status = "success"
+
+        for idx, u in enumerate(new_urls):
+            sub_session_id = f"{session_id}_d{idx+1}"
+            detail_session = detail_acquirer(
+                source=source,
+                detail_url=u,
+                session_id=sub_session_id,
+                listing_result=None,
+            )
+            all_acq_results.extend(detail_session.acquisition_results)
+            if detail_session.agent_evidence_packet:
+                all_agent_packets.append(detail_session.agent_evidence_packet)
+            if detail_session.acquisition_result.technical_status != "success":
+                overall_status = "failed"
+
+        primary_packet = all_agent_packets[0] if all_agent_packets else None
+        if overall_status == "failed":
+            monitoring_fact.technical_status = "failed"
+
+        return SourceAcquisitionSessionResult(
+            source_id=source.source_id,
+            acquisition_result=listing_acq_res,
+            monitoring_fact=monitoring_fact,
+            raw_evidence_path=raw_listing_path,
+            agent_evidence_packet=primary_packet,
+            agent_evidence_packets=all_agent_packets,
+            acquisition_results=all_acq_results,
+        )

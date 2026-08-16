@@ -118,6 +118,8 @@ class SourceAcquisitionExecutor:
             raw_listing_path,
             is_unchanged,
             observed_fingerprint,
+            selected_urls,
+            new_urls,
         ) = ListingAcquisitionHelper.acquire_listing_page(
             source=source,
             session_id=session_id,
@@ -128,7 +130,7 @@ class SourceAcquisitionExecutor:
             conditional_headers=conditional_headers,
         )
 
-        if is_unchanged or not detail_url or listing_acq_res.technical_status == "failed":
+        if is_unchanged or listing_acq_res.technical_status == "failed" or not selected_urls or not new_urls:
             return SourceAcquisitionSessionResult(
                 source_id=source.source_id,
                 acquisition_result=listing_acq_res,
@@ -138,11 +140,15 @@ class SourceAcquisitionExecutor:
                 acquisition_results=[listing_acq_res],
             )
 
-        return self._acquire_detail_and_attachments(
+        # Acquire all new detail URLs incrementally
+        return ListingAcquisitionHelper.acquire_all_details(
             source=source,
-            detail_url=detail_url,
+            new_urls=new_urls,
             session_id=session_id,
-            listing_result=listing_acq_res,
+            listing_acq_res=listing_acq_res,
+            monitoring_fact=monitoring_fact,
+            raw_listing_path=raw_listing_path,
+            detail_acquirer=self._acquire_detail_and_attachments,
         )
 
     def _acquire_detail_and_attachments(
@@ -172,11 +178,7 @@ class SourceAcquisitionExecutor:
                 content_type=None,
                 body_length=0,
                 response_hash="",
-                error_facts={
-                    "error": str(detail_net_err),
-                    "exception_class": type(detail_net_err).__name__,
-                    "stage": "detail_transport",
-                },
+                error_facts={"error": str(detail_net_err), "exception_class": type(detail_net_err).__name__, "stage": "detail_transport"},
                 metadata={"request_type": "detail", "parent_attempt_id": listing_result.attempt_id if listing_result else None},
             )
             all_acq_results.append(detail_acq_res)
@@ -471,12 +473,8 @@ def execute_production_acquisition(
 ) -> Dict[str, Any]:
     """
     Production Acquisition Entrypoint.
-    Owns and drives the mechanical runtime-state lifecycle:
-    1. Resolves active sources from SourceRegistry (including local runtime state).
-    2. Builds conditional headers from committed baselines and executes acquisition.
-    3. Records MonitoringFact for every checked source.
-    4. When change acquisition/parsing succeeds, commits new mechanical baseline.
-    5. Atomically persists local runtime state to .data/sources.json.
+    Drives mechanical runtime-state lifecycle: resolves sources, executes conditional acquisition,
+    records MonitoringFact, commits baseline on success, and persists local runtime state.
     """
     data_path = Path(data_dir)
     if registry is None:

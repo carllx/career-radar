@@ -54,28 +54,25 @@ class IncrementalAcquisitionHelper:
                 results.append(urljoin(listing_url, u))
         return results
 
-    @staticmethod
-    def compute_listing_fingerprint(
+    @classmethod
+    def extract_selected_urls(
+        cls,
         listing_parsed: Dict[str, Any],
         source: SourceRecord,
         listing_url: str,
-    ) -> str:
+    ) -> List[str]:
         """
-        Computes a stable deterministic SHA-256 fingerprint from mechanically selected listing links.
-        Canonical, sorted, unique URL set ensures order-only DOM noise does not trigger false change.
-        Zero semantic keyword filtering (no '招聘' / '教师' heuristics).
+        Mechanically extracts canonical, sorted, unique list of matching detail URLs.
+        Zero semantic recruitment keyword heuristics.
         """
         links = listing_parsed.get("links", [])
         metadata = source.metadata or {}
-
         extracted_urls: List[str] = []
 
         # 1. Configured regex / pattern hint
         pattern_hint = metadata.get("detail_url_pattern") or metadata.get("url_pattern")
         if pattern_hint:
-            extracted_urls = IncrementalAcquisitionHelper._extract_matching_urls(
-                links, listing_url, pattern=pattern_hint
-            )
+            extracted_urls = cls._extract_matching_urls(links, listing_url, pattern=pattern_hint)
 
         # 2. Configured explicit detail_url
         elif metadata.get("detail_url"):
@@ -89,12 +86,43 @@ class IncrementalAcquisitionHelper:
                 if u:
                     extracted_urls.append(urljoin(listing_url, u))
 
-        # 4. Without specific hints, no explicit selection exists: do not fingerprint arbitrary links
         if not extracted_urls:
+            return []
+
+        return sorted(list(set(extracted_urls)))
+
+    @classmethod
+    def diff_urls(
+        cls,
+        current_urls: List[str],
+        committed_urls: Optional[List[str]],
+    ) -> List[str]:
+        """
+        Determines new detail URLs to acquire: current_urls minus committed_urls.
+        Preserves deterministic sorting.
+        """
+        if committed_urls is None:
+            return list(current_urls)
+        committed_set = set(committed_urls)
+        return [u for u in current_urls if u not in committed_set]
+
+    @staticmethod
+    def compute_listing_fingerprint(
+        listing_parsed: Dict[str, Any],
+        source: SourceRecord,
+        listing_url: str,
+    ) -> Optional[str]:
+        """
+        Computes a stable deterministic SHA-256 fingerprint from mechanically selected listing links.
+        Canonical, sorted, unique URL set ensures order-only DOM noise does not trigger false change.
+        Zero semantic keyword filtering (no '招聘' / '教师' heuristics).
+        """
+        canonical_urls = IncrementalAcquisitionHelper.extract_selected_urls(
+            listing_parsed, source, listing_url
+        )
+        if not canonical_urls:
             return None
 
-        # Canonicalize: sort unique URLs
-        canonical_urls = sorted(list(set(extracted_urls)))
         fingerprint_payload = json.dumps(canonical_urls, ensure_ascii=False, sort_keys=True)
         return hashlib.sha256(fingerprint_payload.encode("utf-8")).hexdigest()
 
@@ -157,6 +185,9 @@ class IncrementalAcquisitionHelper:
                 observed_fp = (acq.metadata or {}).get("observed_fingerprint")
                 if observed_fp:
                     fields["listing_fingerprint"] = observed_fp
+                selected_urls = (acq.metadata or {}).get("selected_urls")
+                if selected_urls is not None:
+                    fields["listing_urls"] = selected_urls
                 if acq.etag:
                     fields["etag"] = acq.etag
                 if acq.last_modified:
@@ -200,6 +231,7 @@ class IncrementalAcquisitionHelper:
 
         session_results: List[Any] = []
         all_acquisition_results: List[Any] = []
+        all_agent_evidence_packets: List[Dict[str, Any]] = []
 
         for src in target_sources:
             # Ensure we use latest source state from registry
@@ -207,6 +239,11 @@ class IncrementalAcquisitionHelper:
             res = executor.acquire_source(current_src)
             session_results.append(res)
             all_acquisition_results.extend(res.acquisition_results)
+
+            if getattr(res, "agent_evidence_packets", None):
+                all_agent_evidence_packets.extend(res.agent_evidence_packets)
+            elif res.agent_evidence_packet is not None:
+                all_agent_evidence_packets.append(res.agent_evidence_packet)
 
             # Record technical fact first
             registry.record_monitoring_fact(res.monitoring_fact)
@@ -218,6 +255,7 @@ class IncrementalAcquisitionHelper:
                     registry.commit_mechanical_baseline(
                         source_id=src.source_id,
                         listing_fingerprint=baseline_fields.get("listing_fingerprint"),
+                        listing_urls=baseline_fields.get("listing_urls"),
                         response_hash=baseline_fields.get("response_hash"),
                         etag=baseline_fields.get("etag"),
                         last_modified=baseline_fields.get("last_modified"),
@@ -229,7 +267,5 @@ class IncrementalAcquisitionHelper:
             "session_results": session_results,
             "acquisition_results": all_acquisition_results,
             "monitoring_facts": [r.monitoring_fact for r in session_results],
-            "agent_evidence_packets": [
-                r.agent_evidence_packet for r in session_results if r.agent_evidence_packet is not None
-            ],
+            "agent_evidence_packets": all_agent_evidence_packets,
         }

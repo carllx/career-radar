@@ -66,11 +66,14 @@ class SourceAcquisitionSessionResult:
     monitoring_fact: MonitoringFact
     raw_evidence_path: Optional[str] = None
     agent_evidence_packet: Optional[Dict[str, Any]] = None
+    agent_evidence_packets: List[Dict[str, Any]] = field(default_factory=list)
     acquisition_results: List[AcquisitionResult] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.acquisition_results and self.acquisition_result:
             self.acquisition_results = [self.acquisition_result]
+        if not self.agent_evidence_packets and self.agent_evidence_packet is not None:
+            self.agent_evidence_packets = [self.agent_evidence_packet]
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,4 +83,5 @@ class SourceAcquisitionSessionResult:
             "monitoring_fact": asdict(self.monitoring_fact),
             "raw_evidence_path": self.raw_evidence_path,
             "agent_evidence_packet": self.agent_evidence_packet,
+            "agent_evidence_packets": self.agent_evidence_packets,
         }
