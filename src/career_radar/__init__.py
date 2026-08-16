@@ -2,6 +2,12 @@
 Career Radar - Autonomous career intelligence and recruitment tracking system.
 """
 
+from .acquisition import (
+    AcquisitionResult,
+    SourceAcquisitionExecutor,
+    SourceAcquisitionSessionResult,
+    execute_production_acquisition,
+)
 from .evaluator import (
     IntentValidator,
     MarketIntelligenceValidator,
@@ -38,6 +44,10 @@ __all__ = [
     "CANONICAL_MARKET_INTELLIGENCE_FIELDS",
     "MARKET_INTELLIGENCE_UNKNOWN",
     "VALID_OPPORTUNITY_INTENTS",
+    "AcquisitionResult",
+    "SourceAcquisitionExecutor",
+    "SourceAcquisitionSessionResult",
+    "execute_production_acquisition",
     "CandidateProfile",
     "DimensionEvaluation",
     "EntityResolutionDecision",
