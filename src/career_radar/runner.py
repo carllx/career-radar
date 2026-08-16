@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import yaml
 
-from .evaluator import EvaluationValidator, build_evaluation_packet
+from .evaluator import EvaluationValidator, IntentValidator, build_evaluation_packet
 from .extractor import AnnouncementExtractor
 from .fetcher import AnnouncementFetcher, AttachmentAccessError
 from .models import (
@@ -20,6 +20,7 @@ from .models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from .parser import HTMLAnnouncementParser
@@ -180,6 +181,7 @@ class IncrementalResolutionSession:
         observation: SourceObservation,
         decision: EntityResolutionDecision,
         evaluation_result: Optional[EvaluationResult] = None,
+        intent_decision: Optional[OpportunityIntentDecision] = None,
         current_time: Optional[str] = None,
     ) -> Tuple[Opportunity, str]:
         """
@@ -190,11 +192,16 @@ class IncrementalResolutionSession:
         if evaluation_result:
             validated_eval = EvaluationValidator.validate_and_aggregate(evaluation_result)
 
+        validated_intent = None
+        if intent_decision:
+            validated_intent = IntentValidator.validate(intent_decision)
+
         opp, action = self.applier.apply_decision(
             observation=observation,
             decision=decision,
             opportunities_map=self.working_map,
             evaluation_result=validated_eval,
+            intent_decision=validated_intent,
             current_time=current_time or datetime.now().isoformat(),
         )
 
@@ -253,6 +260,21 @@ class IncrementalResolutionSession:
             and o.latest_evaluation
             and o.latest_evaluation.final_recommendation == "明显不符合"
         )
+        apply_now_count = sum(
+            1 for o in all_opportunities
+            if (o.opportunity_id in self.new_opportunity_ids or o.opportunity_id in self.updated_opportunity_ids)
+            and o.opportunity_intent == "APPLY_NOW"
+        )
+        conditional_count = sum(
+            1 for o in all_opportunities
+            if (o.opportunity_id in self.new_opportunity_ids or o.opportunity_id in self.updated_opportunity_ids)
+            and o.opportunity_intent == "CONDITIONAL"
+        )
+        watch_learn_count = sum(
+            1 for o in all_opportunities
+            if (o.opportunity_id in self.new_opportunity_ids or o.opportunity_id in self.updated_opportunity_ids)
+            and o.opportunity_intent == "WATCH_LEARN"
+        )
 
         return {
             "success": True,
@@ -265,6 +287,9 @@ class IncrementalResolutionSession:
             "recommended_count": recommended_count,
             "review_count": review_count,
             "mismatch_count": mismatch_count,
+            "apply_now_count": apply_now_count,
+            "conditional_count": conditional_count,
+            "watch_learn_count": watch_learn_count,
             "report_path": str(report_file),
             "opportunities": [opp.to_dict() for opp in all_opportunities],
         }
@@ -377,6 +402,7 @@ def run_radar_pipeline(
     profile_path: Union[str, Path],
     observations_source: Union[str, Path, List[Dict[str, Any]], List[SourceObservation]],
     evaluator_fn: Callable[[CandidateProfile, SourceObservation], EvaluationResult],
+    intent_evaluator_fn: Optional[Callable[[CandidateProfile, SourceObservation, EvaluationResult], OpportunityIntentDecision]] = None,
     entity_resolver_fn: Optional[Callable[[SourceObservation, List[Opportunity]], EntityResolutionDecision]] = None,
     data_dir: Union[str, Path] = ".data",
     reports_dir: Union[str, Path] = "reports",
@@ -420,9 +446,12 @@ def run_radar_pipeline(
             )
 
         eval_res = None
+        intent_res = None
         if decision.resolution in ("different", "update", "uncertain"):
             eval_res = evaluator_fn(profile, obs)
+            if intent_evaluator_fn:
+                intent_res = intent_evaluator_fn(profile, obs, eval_res)
 
-        session.stage_decision(obs, decision, eval_res)
+        session.stage_decision(obs, decision, eval_res, intent_res)
 
     return session.commit_and_finalize(reports_dir=reports_dir, run_date=run_date)

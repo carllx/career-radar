@@ -78,11 +78,11 @@ class DigestReporter:
             f"# Career Radar 每日求职情报简报 ({run_date})",
             "",
             f"> **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  ",
-            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 强烈推荐：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
+            f"> **本次巡检机会总数**：{len(target_opps)} 篇 | 资格建议关注：{len(recommended)} 个 | 待确认：{len(review_needed)} 个",
             "",
             "---",
             "",
-            "## 🎯 强烈推荐 / 新增高价值机会",
+            "## 🎯 资格建议关注 / 新增机会",
             "",
         ]
 
@@ -160,6 +160,16 @@ class DigestReporter:
             f"- **地点/赛道**：{opp.location} | {opp.track}",
             f"- **推荐结论**：`{opp.latest_evaluation.final_recommendation if opp.latest_evaluation else '待评定'}`",
         ]
+        if opp.opportunity_intent:
+            intent_cn = {
+                "APPLY_NOW": "即刻行动",
+                "CONDITIONAL": "条件关注",
+                "WATCH_LEARN": "情报观测",
+            }.get(opp.opportunity_intent, opp.opportunity_intent)
+            lines.append(f"- **行动意图**：`{opp.opportunity_intent} / {intent_cn}`")
+        if opp.intent_rationale:
+            lines.append(f"- **意图理由**：{opp.intent_rationale}")
+
         if opp.uncertain_links:
             links_str = ", ".join(opp.uncertain_links)
             lines.append(f"- **实体消歧状态**：`实体同一性待确认`（与既有岗位 `{links_str}` 存在部分重合但证据不足）")

@@ -15,10 +15,12 @@ from typing import Any, Callable, Dict, Protocol
 from .models import (
     CANONICAL_DIMENSIONS,
     VALID_EVIDENCE_STATES,
+    VALID_OPPORTUNITY_INTENTS,
     VALID_RECOMMENDATIONS,
     CandidateProfile,
     DimensionEvaluation,
     EvaluationResult,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 
@@ -118,3 +120,92 @@ class EvaluationValidator:
         # Update final recommendation if not set or ensure consistency
         result.final_recommendation = computed_rec
         return result
+
+
+class SemanticIntentEvaluatorProtocol(Protocol):
+    """
+    Protocol defining the Agent semantic decision boundary for Opportunity Intent.
+    """
+
+    def __call__(
+        self,
+        profile: CandidateProfile,
+        observation: SourceObservation,
+        evaluation_result: EvaluationResult,
+    ) -> OpportunityIntentDecision:
+        ...
+
+
+def build_intent_packet(
+    profile: CandidateProfile,
+    observation: SourceObservation,
+    evaluation_result: EvaluationResult,
+) -> Dict[str, Any]:
+    """
+    Assembles a clean, structured evidence packet for an Agent to decide Opportunity Intent.
+    Exposes candidate preferences, track default_intent prior, opportunity conditions,
+    and eligibility evaluation context.
+    """
+    matching_track = next(
+        (t for t in profile.tracks if t.get("name") == observation.track),
+        None,
+    )
+    return {
+        "candidate_evidence": {
+            "matching_track": matching_track,
+            "track_priority": matching_track.get("priority") if matching_track else None,
+            "track_default_intent": matching_track.get("default_intent") if matching_track else None,
+            "benefit_preferences": profile.benefit_preferences,
+            "engagement_preferences": profile.engagement_preferences,
+            "compensation_preferences": profile.compensation_preferences,
+            "regions": profile.regions,
+            "availability_constraints": profile.availability_constraints,
+            "unresolved_facts": profile.unresolved_facts,
+            "proven_capabilities": profile.proven_capabilities,
+            "adjacent_capabilities": profile.adjacent_capabilities,
+            "learning_targets": profile.learning_targets,
+        },
+        "opportunity_evidence": {
+            "organization": observation.organization,
+            "job_title": observation.job_title,
+            "location": observation.location,
+            "track": observation.track,
+            "official_url": observation.official_url,
+            "requirements": observation.extracted_requirements,
+        },
+        "eligibility_context": {
+            "final_recommendation": evaluation_result.final_recommendation,
+            "dimension_evaluations": {
+                dim: {
+                    "state": eval_item.state,
+                    "requirement_evidence": eval_item.requirement_evidence,
+                    "rationale": eval_item.rationale,
+                }
+                for dim, eval_item in evaluation_result.dimension_evaluations.items()
+            },
+        },
+        "canonical_contract": {
+            "valid_intents": list(VALID_OPPORTUNITY_INTENTS),
+            "intent_rules": [
+                "Track default_intent is only a prior; Agent owns the concrete opportunity intent decision.",
+                "Opportunity Intent is strictly orthogonal to Eligibility; attractive intent must never alter Eligibility states.",
+                "Intent must be one of APPLY_NOW, CONDITIONAL, WATCH_LEARN with a concise rationale.",
+            ],
+        },
+    }
+
+
+class IntentValidator:
+    """
+    Deterministic layer: validates opportunity intent state integrity
+    without embedding business heuristics.
+    """
+
+    @staticmethod
+    def validate(decision: OpportunityIntentDecision) -> OpportunityIntentDecision:
+        if decision.opportunity_intent not in VALID_OPPORTUNITY_INTENTS:
+            raise ValueError(
+                f"Invalid opportunity intent '{decision.opportunity_intent}'. "
+                f"Must be one of {VALID_OPPORTUNITY_INTENTS}"
+            )
+        return decision

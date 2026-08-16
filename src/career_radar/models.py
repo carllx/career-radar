@@ -30,6 +30,26 @@ CANONICAL_TRACKS = [
 VALID_EVIDENCE_STATES = {"PASS", "REVIEW", "FAIL", "UNKNOWN", "N/A"}
 VALID_RECOMMENDATIONS = {"建议关注", "需要人工确认", "明显不符合"}
 VALID_RESOLUTION_OUTCOMES = {"same", "update", "different", "uncertain"}
+VALID_OPPORTUNITY_INTENTS = {"APPLY_NOW", "CONDITIONAL", "WATCH_LEARN"}
+
+
+@dataclass
+class OpportunityIntentDecision:
+    opportunity_intent: str  # APPLY_NOW / CONDITIONAL / WATCH_LEARN
+    intent_rationale: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "opportunity_intent": self.opportunity_intent,
+            "intent_rationale": self.intent_rationale,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OpportunityIntentDecision":
+        return cls(
+            opportunity_intent=data["opportunity_intent"],
+            intent_rationale=data.get("intent_rationale", ""),
+        )
 
 
 def calculate_chronological_age(
@@ -291,6 +311,8 @@ class Opportunity:
     change_diff: Optional[Dict[str, Any]] = None
     update_summary: Optional[str] = None
     uncertain_links: List[str] = field(default_factory=list)
+    opportunity_intent: Optional[str] = None
+    intent_rationale: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Opportunity":
@@ -334,6 +356,8 @@ class Opportunity:
             change_diff=data.get("change_diff"),
             update_summary=data.get("update_summary"),
             uncertain_links=data.get("uncertain_links", []),
+            opportunity_intent=data.get("opportunity_intent"),
+            intent_rationale=data.get("intent_rationale"),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -355,4 +379,8 @@ class Opportunity:
             res["change_diff"] = self.change_diff
         if self.update_summary:
             res["update_summary"] = self.update_summary
+        if self.opportunity_intent is not None:
+            res["opportunity_intent"] = self.opportunity_intent
+        if self.intent_rationale is not None:
+            res["intent_rationale"] = self.intent_rationale
         return res

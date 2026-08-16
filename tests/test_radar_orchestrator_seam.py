@@ -388,7 +388,7 @@ class TestRadarOrchestratorSeam:
 
         # Check 4-section Daily Digest
         content = Path(outcome.report_path).read_text(encoding="utf-8")
-        assert "## 🎯 强烈推荐 / 新增高价值机会" in content
+        assert "## 🎯 资格建议关注 / 新增机会" in content
         assert "广东药科大学" in content
         assert "## ⚠️ 需要人工确认" in content
         assert "广东农工商职业技术学院" in content

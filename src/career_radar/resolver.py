@@ -14,6 +14,7 @@ from .models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
     VALID_RESOLUTION_OUTCOMES,
 )
@@ -62,6 +63,7 @@ class EntityResolutionApplier:
         decision: EntityResolutionDecision,
         opportunities_map: Dict[str, Opportunity],
         evaluation_result: Optional[EvaluationResult] = None,
+        intent_decision: Optional[OpportunityIntentDecision] = None,
         current_time: Optional[str] = None,
     ) -> Tuple[Opportunity, str]:
         """
@@ -111,6 +113,9 @@ class EntityResolutionApplier:
                 "updated_at": current_time,
             }
             target_opp.latest_evaluation = evaluation_result
+            if intent_decision:
+                target_opp.opportunity_intent = intent_decision.opportunity_intent
+                target_opp.intent_rationale = intent_decision.intent_rationale
             target_opp.updated_at = current_time
             return target_opp, "updated_opportunity"
 
@@ -133,6 +138,8 @@ class EntityResolutionApplier:
                 latest_evaluation=evaluation_result,
                 created_at=observation.observed_at or current_time,
                 updated_at=observation.observed_at or current_time,
+                opportunity_intent=intent_decision.opportunity_intent if intent_decision else None,
+                intent_rationale=intent_decision.intent_rationale if intent_decision else None,
             )
             opportunities_map[new_opp_id] = new_opp
             return new_opp, "new_different"
@@ -162,6 +169,8 @@ class EntityResolutionApplier:
                 created_at=observation.observed_at or current_time,
                 updated_at=observation.observed_at or current_time,
                 uncertain_links=[target_id],
+                opportunity_intent=intent_decision.opportunity_intent if intent_decision else None,
+                intent_rationale=intent_decision.intent_rationale if intent_decision else None,
             )
             opportunities_map[new_opp_id] = new_opp
 

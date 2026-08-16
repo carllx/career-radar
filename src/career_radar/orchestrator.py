@@ -24,6 +24,7 @@ from .models import (
     EntityResolutionDecision,
     EvaluationResult,
     Opportunity,
+    OpportunityIntentDecision,
     SourceObservation,
 )
 from .runner import IncrementalResolutionSession
@@ -48,6 +49,9 @@ class RadarRunOutcome:
     network_changes_count: int
     report_path: str
     summary_message: str
+    apply_now_count: int = 0
+    conditional_count: int = 0
+    watch_learn_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -92,6 +96,9 @@ class RadarOrchestrator:
         ] = None,
         evaluator_fn: Optional[
             Callable[[CandidateProfile, SourceObservation], EvaluationResult]
+        ] = None,
+        intent_evaluator_fn: Optional[
+            Callable[[CandidateProfile, SourceObservation, EvaluationResult], OpportunityIntentDecision]
         ] = None,
         run_date: Optional[str] = None,
     ) -> RadarRunOutcome:
@@ -141,14 +148,17 @@ class RadarOrchestrator:
                 )
 
             eval_res = None
+            intent_res = None
             if decision.resolution in ("different", "update", "uncertain"):
                 if not evaluator_fn:
                     raise ValueError(
                         f"Missing required evaluator_fn for {decision.resolution} on observation '{obs.observation_id}'"
                     )
                 eval_res = evaluator_fn(profile, obs)
+                if intent_evaluator_fn:
+                    intent_res = intent_evaluator_fn(profile, obs, eval_res)
 
-            session.stage_decision(obs, decision, eval_res)
+            session.stage_decision(obs, decision, eval_res, intent_res)
 
         # 4. Atomic Commit of Opportunities and Sources
         network_changes = source_registry.network_changes
@@ -171,9 +181,10 @@ class RadarOrchestrator:
         summary_msg = (
             f"Radar Run ({run_date}) 完成：实际监测 {actual_monitored_count} 个渠道，"
             f"新发现 {discovered_count} 个渠道；"
-            f"新增推荐机会 {summary['recommended_count']} 个，"
-            f"重点更新 {summary['updated_opportunities_count']} 个，"
-            f"待确认 {summary['review_count']} 个。"
+            f"新增机会 {summary['new_opportunities_count']} 个（资格建议关注 {summary['recommended_count']} 个，待人工确认 {summary['review_count']} 个）；"
+            f"行动建议分布：即刻行动 {summary.get('apply_now_count', 0)} 个，"
+            f"条件关注 {summary.get('conditional_count', 0)} 个，"
+            f"情报观测 {summary.get('watch_learn_count', 0)} 个。"
         )
 
         return RadarRunOutcome(
@@ -189,4 +200,7 @@ class RadarOrchestrator:
             network_changes_count=len(network_changes),
             report_path=summary["report_path"],
             summary_message=summary_msg,
+            apply_now_count=summary.get("apply_now_count", 0),
+            conditional_count=summary.get("conditional_count", 0),
+            watch_learn_count=summary.get("watch_learn_count", 0),
         )

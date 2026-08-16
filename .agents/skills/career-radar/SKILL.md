@@ -37,15 +37,28 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 - **`需要人工确认`**：存在 `REVIEW` 或 `UNKNOWN` 且无 `FAIL`；
 - **`明显不符合`**：存在任意维度为 `FAIL`。
 
-### 1.3 概念解耦原则 (Semantic Independence)
+### 1.3 机会行动意图 (Opportunity Intent 3 Canonical States)
+针对具体机会当前应采取的行动姿态，必须且仅能取自以下 3 种标准状态：
+- **`APPLY_NOW`**：即刻行动（条件对口、偏好符合，建议立即推进申请）；
+- **`CONDITIONAL`**：条件关注（存在特定排期、待遇、岗位编制或外部约束，触发条件后再行动）；
+- **`WATCH_LEARN`**：情报观测（用于跟踪赛道标杆技能要求、薪酬风向或市场动态，非即刻投递目标）。
+
+> [!IMPORTANT]
+> **资格与意图解耦**：
+> 1. `Track.default_intent` 仅为候选人画像中配置的**先验倾向**，绝不机械等同于具体机会的最终意图；
+> 2. `Opportunity Intent` 由 Agent 语义层依据岗位具体条件与候选人偏好综合裁决；
+> 3. 意图吸引力**绝不可篡改**资格评定结论（`Eligibility FAIL` 依然保持 `明显不符合`）。
+
+### 1.4 概念解耦原则 (Semantic Independence)
 - **Entity Resolution `uncertain`**：实体同一性存疑（跨渠道两篇公告是否属于同一用人单位同一岗位存疑，建立双向 soft link，不污染资格维度）；
 - **Dimension `UNKNOWN` / `REVIEW`**：单项维度事实或证据的不确定性；
-- **Final Recommendation `需要人工确认`**：多维综合研判后的最终推荐分级。
-三者严格解耦，独立表达。
+- **Final Recommendation `需要人工确认`**：多维综合研判后的资格准入分级；
+- **Opportunity Intent `CONDITIONAL` / `WATCH_LEARN`**：针对该具体机会的行动与跟进策略。
+四者严格解耦，独立表达。
 
 ---
 
-## 2. Agent 端到端编排工作流 (12-Step Workflow)
+## 2. Agent 端到端编排工作流 (13-Step Workflow)
 
 ### 步骤 1：加载候选人画像与运行状态
 - 读取 `profile.local.yaml`（若缺失则回退 `config/profile.example.yaml`）；
@@ -81,7 +94,7 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 
 ### 步骤 8：Agent 实体消歧裁决 (Entity Resolution)
 - Agent 作为唯一语义权威，依据岗位信息研判四态：
-  - `same`：同一岗位多渠道观测，合并历史，不重复通知；
+  - `same`：同一岗位多渠道观测，合并历史，继承既有意图，不重复通知；
   - `update`：历史岗位发布补充公告或延期，记录 Diff 摘要并触发增量重评；
   - `different`：新建独立 Opportunity 实体；
   - `uncertain`：存疑不激进误合并，创建独立实体并建立双向 `uncertain_links`。
@@ -89,19 +102,25 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 ### 步骤 9：Agent 多维资格评定 (Eligibility Evaluation)
 - 对 `different`、`update`、`uncertain` 岗位严格执行 6 大标准维度评估；
 - 逐项给出 5 种标准状态之一，并在 `requirement_evidence` 中**必须引用公告/附件原文证据**（严禁编造伪原文）；
-- 聚合输出最终推荐结论。
+- 聚合输出资格推荐结论（`建议关注` / `需要人工确认` / `明显不符合`）。
 
-### 步骤 10：Single-Shot 独立文件原子写入 (Persistence)
-- 调用 Helper 写入 `.data/opportunities.jsonl`（采用写入临时文件后重命名替换，保证单文件原子性与不损坏）；
+### 步骤 10：Agent 机会行动意图裁决 (Opportunity Intent Decision)
+- 对 `different`、`update`、`uncertain` 岗位进行独立的行动意图研判：
+  - 读取赛道 `default_intent` 作为先验；
+  - 结合岗位具体条件（用人单位性质、工作自主权、薪资待遇、排期冲突等）与候选人偏好（`benefit_preferences`, `engagement_preferences`, `compensation_preferences`, `availability_constraints`）；
+  - 输出标准意图：`APPLY_NOW` / `CONDITIONAL` / `WATCH_LEARN` 与 `intent_rationale`。
+
+### 步骤 11：Single-Shot 独立文件原子写入 (Persistence)
+- 调用 Helper 写入 `.data/opportunities.jsonl`（包含资格结论与行动意图，采用写入临时文件后重命名替换，保证单文件原子性与不损坏）；
 - 调用 Helper 写入本地渠道状态至 `.data/sources.json`（同样采用临时文件重命名原子替换）；
 - 校验失败则在写入前 Fail Fast。各状态文件独立维护，不依赖跨文件分布式事务。
 
-### 步骤 11：数据驱动渲染每日简报 (Daily Digest)
+### 步骤 12：数据驱动渲染每日简报 (Daily Digest)
 - 生成 `reports/YYYY-MM-DD.md`，完整呈现四大板块：
-  - 🎯 **强烈推荐 / 新增高价值机会**
+  - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由）
   - 🔄 **重点岗位动态变更**（直达本次变更的最新 SourceObservation URL）
   - ⚠️ **需要人工确认**（标注 `【实体同一性待确认】` 与存疑维度）
   - 🌐 **渠道网络变动**（真实数据驱动呈现新发现渠道与降级渠道；若无变动则写“本轮无渠道网络状态变化。”）
 
-### 步骤 12：输出 IDE 对话高信噪比摘要
-- 在聊天窗口中为用户呈现巡检总结：实际监控源数量、新发现渠道、新增推荐岗位、重点变更与待人工确认事项。
+### 步骤 13：输出 IDE 对话高信噪比摘要
+- 在聊天窗口中为用户呈现巡检总结：实际监控源数量、新发现渠道、新增岗位数（资格建议关注数、待确认数）以及行动意图分布（即刻行动、条件关注、情报观测）。

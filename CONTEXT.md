@@ -16,10 +16,24 @@
 用于指导情报路由、排序与行动倾向的非资格属性。涵盖赛道优先级（`Track Priority`）、地域层级（`Location Priority`）、现实保障（`Benefit Preferences`：社保医保、稳定性、时间自主权）、雇佣形态（`Engagement Preferences`）与弹性薪酬考量（`Compensation Preferences`）。偏好考量绝不作为法定资格准入的阻断项。
 
 ### Track Priority（赛道优先级）
-业务关注赛道的战略分组与呈现层级（如 `1`、`2`、`3`、`4`），独立于法定资格准入（Eligibility）。
+业务关注赛道的战略分组与呈现层级（如 `1`、`2`、`3`、`4`），独立于法定资格准入（Eligibility）与具体机会行动意图（Opportunity Intent）。
+
+### Default Intent（赛道默认意图）
+在候选人画像（`Candidate Profile`）中为特定赛道配置的**先验行动倾向**（如 `APPLY_NOW`、`CONDITIONAL`、`WATCH_LEARN`）。作为 Agent 裁决具体机会意图时的参考先验，绝不机械等同于最终意图。
+
+### Opportunity Intent（机会行动意图）
+Agent 针对具体 `Opportunity` 输出的当前行动姿态决策，包含三个 canonical states：
+- `APPLY_NOW`：即刻行动（条件对口、偏好符合，建议立即推进申请）；
+- `CONDITIONAL`：条件关注（存在特定排期、待遇、编制或外部约束，触发条件后再行动）；
+- `WATCH_LEARN`：情报观测（用于跟踪赛道标杆技能要求、薪酬风向或市场动态，非即刻投递目标）。
+
+`Opportunity Intent` 独立于 `Eligibility`（资格准入）与 `Track Priority`（赛道优先级）。公式上：`Track Priority != Default Intent != Opportunity Intent`。
+
+### Intent Rationale（意图裁决理由）
+Agent 在输出 `Opportunity Intent` 时所提供的简明决策依据，解释为何结合岗位具体条件与候选人偏好确定该行动意图。
 
 ### Location Priority（地域优先级）
-工作地点匹配层级（`P1 广州`、`P2 广佛莞周边`、`P3 大湾区其他`），用于呈现排序与关注度标记。
+工作地点匹配层级（如 `P1 核心目标区域`、`P2 周边通勤圈`、`P3 拓展区域`），用于呈现排序与关注度标记。
 
 ### Availability Constraint（排期约束）
 候选人已知的时间排期与外聘/项目承诺约束。在排课或日程细节不明确（`UNKNOWN`）前，严禁主观推断为时间冲突。

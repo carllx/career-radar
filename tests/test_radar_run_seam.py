@@ -293,7 +293,7 @@ def test_career_radar_highest_seam_full_run(mock_radar_env):
     assert report_file.exists(), "Daily digest report must be generated"
 
     report_content = report_file.read_text(encoding="utf-8")
-    assert "## 🎯 强烈推荐 / 新增高价值机会" in report_content
+    assert "## 🎯 资格建议关注 / 新增机会" in report_content
     assert "数字媒体技术专任教师" in report_content
     assert "广东轻工职业技术大学" in report_content
     assert "http://hrss.gd.gov.cn/zwgk/gsgg/content_001.html" in report_content
