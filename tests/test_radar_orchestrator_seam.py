@@ -182,7 +182,11 @@ class TestRadarOrchestratorSeam:
             track=["vocational_education"],
             region="guangzhou",
             rationale="发现省属公办高职院校最新招聘专栏",
-            provenance={"discovery_channel": "agent-reach", "query": "广州高职院校 教师招聘 2026"},
+            provenance={
+                "verification_url": "https://www.gdaib.edu.cn/rsc/",
+                "verified_at": "2026-08-15T09:00:00",
+                "method": "direct_http_fetch",
+            },
         )
 
         outcome = orchestrator.run(source_decisions=[discovery_decision], run_date="2026-08-15")
@@ -306,7 +310,11 @@ class TestRadarOrchestratorSeam:
             base_url="https://www.gdaib.edu.cn/rsc/",
             source_type="first_party_institution",
             rationale="发现新高职招聘渠道",
-            provenance={"discovery_channel": "agent-reach", "verification_url": "https://www.gdaib.edu.cn/rsc/"},
+            provenance={
+                "verification_url": "https://www.gdaib.edu.cn/rsc/",
+                "verified_at": "2026-08-15T09:00:00",
+                "method": "direct_http_fetch",
+            },
         )
 
         # 5. Incoming Observations

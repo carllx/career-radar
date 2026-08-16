@@ -103,10 +103,12 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 - 对已持久化但实际不可用/维护中的渠道，签发 `action="degrade"` 并记录审计理由；
 - **严禁自动篡改公共种子库 `config/sources.seed.json`**。
 
-### 步骤 6：第一方公告、HTML 表格与附件切片提取 (Acquisition & Extraction)
-- 对目标第一方页面，调用 `fetch_and_extract_first_party_announcement` 机械解析 HTML 正文、标题、层级、链接、HTML 表格（`<table>`）以及附件表格（`.xlsx`、`.docx`、text-native `.pdf`）；
-- 若 HTML 表格或附件中包含明确具体岗位行，机械切片生成带有真实 Provenance（`evidence_type`、`raw_cells`、`source_url`）的 `SourceObservation`；
-- **Anti-Hallucination 边界**：若页面仅为泛化招聘宣传（如“欢迎关注招聘信息”）而无具体岗位，必须输出 0 `SourceObservation`，严禁从公告标题凭空捏造岗位。
+### 步骤 6：第一方公告、HTML 证据包与附件切片提取 (Acquisition & Extraction)
+- 对目标第一方页面，调用 `fetch_and_extract_first_party_announcement` 获取结构化数据：
+  - Helper 确定性解析并保留第一方 HTML 证据包（`title`, `body_text`, `headings`, `links`, `tables`, `attachments`）；
+  - Helper 机械切片提取附件表格（`.xlsx`, `.docx`, text-native `.pdf`）；
+- **Agent 语义研判与 Observation 产出**：针对无附件的第一方 HTML 页面（包括 HTML 表格、招聘详情页、列表卡片），由 Agent 语义层研判是否存在具体岗位行/岗位块并产出包含丰富 Provenance 的 `SourceObservation`；
+- **Anti-Hallucination 边界**：若页面仅为泛化招聘宣传（如“欢迎关注人才招聘”）而无具体岗位，Agent 严格产出 0 `SourceObservation`，严禁从公告标题凭空捏造岗位。
 
 ### 步骤 7：高召回候选检索 (Candidate Retrieval)
 - 由 Helper `CandidateRetriever` 基于用人单位检索同机构历史 Opportunity 以及同 Run 先前 staged 的实体。
@@ -143,7 +145,7 @@ description: "Executes an end-to-end Autonomous Career Radar run as the primary 
 
 ### 步骤 13：数据驱动渲染每日简报 (Daily Digest Truthfulness)
 - 生成 `reports/YYYY-MM-DD.md`，完整呈现核心板块：
-  - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由；若本轮因渠道受限或采集缺口导致 0 新增机会，如实提示覆盖度限制，不误导用户）
+  - 🎯 **资格建议关注 / 新增机会**（清晰展示资格结论与行动意图及理由；若本轮因渠道受限或采集缺口导致 0 新增机会，由 Agent 根据巡检证据裁决并显式传入 `acquisition_gaps`，渲染真实的覆盖度提示，避免误导用户高估覆盖度）
   - 🔭 **WATCH_LEARN / 市场情报观察**（高信噪比呈现 8 项市场事实；缺失项清晰标明 `UNKNOWN`）
   - ⚠️ **需要人工确认**（标注 `【实体同一性待确认】` 与存疑维度）
   - 🔄 **重点岗位动态变更**（直达本次变更的最新 SourceObservation URL）

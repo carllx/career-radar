@@ -187,17 +187,12 @@ class RadarOrchestrator:
 
         # 4. Atomic Commit of Opportunities and Sources
         network_changes = source_registry.network_changes
-        effective_gaps = list(acquisition_gaps or [])
-        if has_monitoring_failure and not effective_gaps:
-            effective_gaps.append("部分监控渠道本轮访问异常或受限，结果不代表市场不存在相关机会。")
-        elif any(c.get("type") == "degraded" for c in network_changes) and not incoming_observations and not effective_gaps:
-            effective_gaps.append("部分渠道本轮不可访问或存在尚未完成解析的第一方页面，结果不代表市场不存在相关机会。")
 
         summary = session.commit_and_finalize(
             reports_dir=self.reports_dir,
             run_date=run_date,
             network_changes=network_changes,
-            acquisition_gaps=effective_gaps if effective_gaps else None,
+            acquisition_gaps=acquisition_gaps,
             coverage_caveat=coverage_caveat,
         )
         source_registry.save_local_state()

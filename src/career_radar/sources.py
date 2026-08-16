@@ -213,17 +213,18 @@ class SourceRegistry:
                 raise ValueError("Source discovery decision requires 'name' and 'base_url'")
             if not decision.provenance or not isinstance(decision.provenance, dict) or len(decision.provenance) == 0:
                 raise ValueError("Source discovery decision requires 'provenance' containing first-party verification evidence.")
-            has_verification = any(
-                k in decision.provenance
-                for k in (
-                    "verification_url", "source_url", "verified_url", "discovery_channel",
-                    "evidence", "retrieval_evidence", "verified_at", "method", "query"
-                )
-            )
-            if not has_verification:
+            
+            # Require explicit first-party verification evidence (search-only leads like query/discovery_channel alone are rejected)
+            verification_url = decision.provenance.get("verification_url") or decision.provenance.get("verified_url")
+            verified_at = decision.provenance.get("verified_at")
+            method = decision.provenance.get("method") or decision.provenance.get("retrieval_evidence") or decision.provenance.get("evidence")
+
+            if not verification_url or not verified_at or not method:
                 raise ValueError(
-                    "Source discovery decision provenance must contain first-party verification evidence (e.g. 'verification_url' or 'evidence')."
+                    "Source discovery decision requires first-party verification evidence in provenance "
+                    "(must include 'verification_url', 'verified_at', and 'method' or 'retrieval_evidence')."
                 )
+
             domain = decision.domain or (decision.base_url.split("//")[-1].split("/")[0] if "//" in decision.base_url else decision.base_url)
             rec = SourceRecord(
                 source_id=decision.source_id,
@@ -253,10 +254,22 @@ class SourceRegistry:
             src = self.get_source(decision.source_id)
             if not src:
                 raise KeyError(f"Source '{decision.source_id}' not found for degradation")
+            
+            # Preserve prior provenance and record auditable degradation event
+            prior_prov = dict(src.provenance or {})
+            degrade_audit = {
+                "degraded_at": now,
+                "reason": decision.rationale or "渠道失效或不可访问",
+            }
+            if decision.provenance:
+                degrade_audit["evidence"] = decision.provenance
+            prior_prov["degradation_audit"] = degrade_audit
+
             updated = SourceRecord.from_dict({
                 **src.to_dict(),
                 "lifecycle_status": "degraded",
                 "degraded_reason": decision.rationale or "渠道失效或不可访问",
+                "provenance": prior_prov,
             })
             self.local_sources[decision.source_id] = updated
             self._network_changes.append({

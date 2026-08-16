@@ -126,6 +126,7 @@ def fetch_and_extract_first_party_announcement(
         "extraction_completeness": extraction_completeness,
         "html_tables_count": html_tables_count,
         "html_headings_count": html_headings_count,
+        "html_evidence": parsed_meta,
         "attachments": attachment_reports,
         "observations_count": len(observations),
     }
@@ -136,8 +137,9 @@ def fetch_and_extract_first_party_announcement(
 
 class AnnouncementExtractor:
     """
-    Slices first-party announcement HTML and attachment tables into discrete SourceObservations.
+    Slices first-party announcement attachment tables (XLSX, DOCX, PDF) into discrete SourceObservations.
     If attachments fail or contain no concrete job rows, returns an empty list without fake jobs.
+    HTML semantic interpretation is owned by the Agent via the html_evidence packet.
     """
 
     def __init__(self, cache_dir: Optional[Path] = None):
@@ -164,23 +166,7 @@ class AnnouncementExtractor:
 
         observations: List[SourceObservation] = []
 
-        # 1. Parse HTML tables if present
-        for t_idx, table in enumerate(parsed_html.get("tables", [])):
-            html_obs = self._extract_observations_from_table(
-                table=table,
-                announcement_id=announcement_id,
-                announcement_title=announcement_title,
-                source_id=source_id,
-                source_name=source_name,
-                source_url=source_url,
-                observed_at=observed_at,
-                recruiting_organization=recruiting_organization,
-                is_html=True,
-                table_idx=t_idx,
-            )
-            observations.extend(html_obs)
-
-        # 2. Parse all attachments
+        # Parse all attachments (Issue #10 deterministic attachment table extraction)
         attachment_paths = local_attachment_paths or []
         for att_path in attachment_paths:
             try:
@@ -198,12 +184,11 @@ class AnnouncementExtractor:
                     source_url=source_url,
                     observed_at=observed_at,
                     recruiting_organization=recruiting_organization,
-                    is_html=False,
                     att_path=att_path,
                 )
                 observations.extend(att_obs)
 
-        # STRICT RULE: If no table rows were found, DO NOT fabricate fake job from announcement title.
+        # STRICT RULE: If no attachment table rows were found, DO NOT fabricate fake job from announcement title.
         return observations
 
     def _extract_observations_from_table(
@@ -216,8 +201,6 @@ class AnnouncementExtractor:
         source_url: str,
         observed_at: str,
         recruiting_organization: Optional[str] = None,
-        is_html: bool = False,
-        table_idx: int = 0,
         att_path: Optional[Path] = None,
     ) -> List[SourceObservation]:
         observations = []
@@ -282,28 +265,17 @@ class AnnouncementExtractor:
             # Determine row-level canonical track (NO job rank / grade mapping)
             track = self._find_matching_cell(cells, ["招聘赛道", "业务赛道", "目标赛道"])
 
-            if is_html:
-                obs_id = f"obs_{announcement_id}_html_{table_idx}_{row_idx}"
-                prov = {
-                    "source_url": source_url,
-                    "evidence_type": "html_table",
-                    "table_index": table.get("table_index", table_idx),
-                    "row_index": row_idx,
-                    "department": department,
-                    "raw_cells": cells,
-                }
-            else:
-                stem = att_path.stem if att_path else "att"
-                file_name = att_path.name if att_path else "attachment"
-                obs_id = f"obs_{announcement_id}_{stem}_{row_idx}"
-                prov = {
-                    "source_url": source_url,
-                    "file_name": file_name,
-                    "sheet_name": table.get("sheet_name"),
-                    "row_index": row_idx,
-                    "department": department,
-                    "raw_cells": cells,
-                }
+            stem = att_path.stem if att_path else "att"
+            file_name = att_path.name if att_path else "attachment"
+            obs_id = f"obs_{announcement_id}_{stem}_{row_idx}"
+            prov = {
+                "source_url": source_url,
+                "file_name": file_name,
+                "sheet_name": table.get("sheet_name"),
+                "row_index": row_idx,
+                "department": department,
+                "raw_cells": cells,
+            }
 
             obs = SourceObservation(
                 observation_id=obs_id,
