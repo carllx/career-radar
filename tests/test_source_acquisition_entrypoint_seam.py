@@ -48,17 +48,28 @@ class FakeHttpTransport:
                 text=resp_data.get("text", ""),
                 headers=resp_data.get("headers", {"Content-Type": "text/html; charset=utf-8"}),
                 url=url,
+                content=resp_data.get("content"),
             )
         return FakeResponse(status_code=404, text="Not Found", headers={}, url=url)
 
 
 class FakeResponse:
-    def __init__(self, status_code: int, text: str, headers: Dict[str, str], url: str):
+    def __init__(
+        self,
+        status_code: int,
+        text: str,
+        headers: Dict[str, str],
+        url: str,
+        content: Any = None,
+    ):
         self.status_code = status_code
         self.text = text
         self.headers = headers
         self.url = url
-        self.content = text.encode("utf-8")
+        if content is not None:
+            self.content = content
+        else:
+            self.content = text.encode("utf-8")
 
     def raise_for_status(self):
         if self.status_code >= 400:
