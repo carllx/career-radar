@@ -104,9 +104,9 @@ class SourceAcquisitionExecutor:
     def acquire_source(self, source: SourceRecord) -> SourceAcquisitionSessionResult:
         session_id = f"acq_{uuid.uuid4().hex[:12]}"
         metadata = source.metadata or {}
-        is_listing_archetype = metadata.get("is_listing", False) or metadata.get("archetype") == "listing_html"
+        is_listing_source = bool(metadata.get("is_listing", False))
 
-        if not is_listing_archetype:
+        if not is_listing_source:
             return self._acquire_detail_and_attachments(
                 source=source,
                 detail_url=source.base_url,
@@ -308,7 +308,8 @@ class SourceAcquisitionExecutor:
                     "request_type": "detail",
                     "raw_evidence_path": raw_evidence_path,
                     "attachments_found_count": len(discovered_attachments),
-                    "attachments_acquired_count": len([r for r in attachment_reports if r.get("status") == "success"]),
+                    "attachments_acquired_count": len([a for a in attachment_audit_facts if a.get("status") == "success"]),
+                    "attachments_parsed_count": len([a for a in attachment_audit_facts if a.get("parse_status") == "success"]),
                     "attachment_audits": attachment_audit_facts,
                     "physical_requests_count": len(all_acq_results) + 1,
                 },

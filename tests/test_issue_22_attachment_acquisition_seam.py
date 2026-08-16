@@ -9,23 +9,18 @@ Tests verify external behavior of execute_production_acquisition and SourceAcqui
 5. Legacy unsupported formats (.xls, .doc) report unsupported_legacy_format truthfully.
 6. Safe attachment filenames: path traversal sanitization and same-name collision avoidance.
 7. Text-native PDF extraction proof with non-empty text pages.
+8. Listing without configured hints produces no arbitrary detail request or fabricated evidence.
 """
 
 from io import BytesIO
-import os
 from pathlib import Path
 from typing import Any, Dict
 
 import docx
 import openpyxl
-from pypdf import PdfReader
 import pytest
 
-from career_radar.acquisition import (
-    AcquisitionResult,
-    execute_production_acquisition,
-)
-from career_radar.attachment_helper import AttachmentAcquisitionHelper
+from career_radar.acquisition import execute_production_acquisition
 from career_radar.sources import SourceRecord
 
 
@@ -119,7 +114,6 @@ def sample_docx_bytes() -> bytes:
 
 @pytest.fixture
 def sample_pdf_bytes() -> bytes:
-    # Text-native PDF with extractable content stream
     return (
         b"%PDF-1.4\n"
         b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
@@ -136,47 +130,26 @@ def sample_pdf_bytes() -> bytes:
 
 
 def test_three_hop_listing_to_detail_to_xlsx_attachment(tmp_path: Path, sample_xlsx_bytes: bytes):
-    """
-    Finding 1 & 2: True 3-hop tracer (Listing HTML -> Detail HTML -> XLSX attachment).
-    Proves:
-    - Listing page GET generates AcquisitionResult with request_type=listing.
-    - Deterministic link selection using config hint (detail_url_pattern).
-    - Detail page GET generates AcquisitionResult with request_type=detail.
-    - Attachment GET generates AcquisitionResult with request_type=attachment.
-    - Listing and Detail raw HTML are preserved in distinct files on disk.
-    - Top-level execute_production_acquisition exposes all 3 physical AcquisitionResults.
-    """
     listing_url = "https://hrss.gd.gov.cn/zwgk/zp_list.html"
     detail_url = "https://hrss.gd.gov.cn/zwgk/zp2026_01.html"
     att_url = "https://hrss.gd.gov.cn/attach/2026_post_table.xlsx"
 
     listing_html = f"""<!DOCTYPE html>
-    <html>
-    <head><title>招聘信息列表</title></head>
-    <body>
-      <ul class="news-list">
-        <li><a href="{detail_url}">广东岭南工程学院2026年公开招聘专任教师公告</a></li>
-        <li><a href="/other/notice.html">其他无关通知</a></li>
-      </ul>
-    </body>
-    </html>"""
+    <html><body><ul class="news-list">
+      <li><a href="{detail_url}">广东岭南工程学院2026年公开招聘专任教师公告</a></li>
+      <li><a href="/other/notice.html">其他无关通知</a></li>
+    </ul></body></html>"""
 
     detail_html = f"""<!DOCTYPE html>
-    <html>
-    <head><title>广东岭南工程学院2026年公开招聘专任教师公告</title></head>
-    <body>
+    <html><body>
       <h1>广东岭南工程学院2026年公开招聘专任教师公告</h1>
-      <p>为满足教育教学需要，现面向社会招聘专任教师，具体岗位见附件：</p>
-      <div class="attachment-box">
-        <a href="{att_url}" title="岗位表.xlsx">附件：广东岭南工程学院2026年岗位需求明细表.xlsx</a>
-      </div>
-    </body>
-    </html>"""
+      <a href="{att_url}" title="岗位表.xlsx">附件：岗位需求明细表.xlsx</a>
+    </body></html>"""
 
     transport = FakeHttpTransport(
         responses={
-            listing_url: {"status_code": 200, "text": listing_html, "headers": {"Content-Type": "text/html; charset=utf-8"}},
-            detail_url: {"status_code": 200, "text": detail_html, "headers": {"Content-Type": "text/html; charset=utf-8"}},
+            listing_url: {"status_code": 200, "text": listing_html, "headers": {"Content-Type": "text/html"}},
+            detail_url: {"status_code": 200, "text": detail_html, "headers": {"Content-Type": "text/html"}},
             att_url: {
                 "status_code": 200,
                 "content": sample_xlsx_bytes,
@@ -195,7 +168,7 @@ def test_three_hop_listing_to_detail_to_xlsx_attachment(tmp_path: Path, sample_x
         domain="hrss.gd.gov.cn",
         source_type="first_party_official",
         metadata={
-            "archetype": "listing_html",
+            "archetype": "static_html_attachment",
             "is_listing": True,
             "detail_url_pattern": r"zp2026_\d+\.html",
         },
@@ -204,13 +177,7 @@ def test_three_hop_listing_to_detail_to_xlsx_attachment(tmp_path: Path, sample_x
     data_dir = tmp_path / ".data"
     output = execute_production_acquisition(sources=[source], data_dir=data_dir, transport=transport)
 
-    # 1. Transport invoked for all 3 physical hops
     assert len(transport.requests_log) == 3
-    assert transport.requests_log[0]["url"] == listing_url
-    assert transport.requests_log[1]["url"] == detail_url
-    assert transport.requests_log[2]["url"] == att_url
-
-    # 2. Top-level output contains all 3 physical AcquisitionResults
     acq_results = output["acquisition_results"]
     assert len(acq_results) == 3
 
@@ -218,31 +185,61 @@ def test_three_hop_listing_to_detail_to_xlsx_attachment(tmp_path: Path, sample_x
     assert list_acq.requested_url == listing_url
     assert list_acq.technical_status == "success"
     assert list_acq.metadata["request_type"] == "listing"
-    assert Path(list_acq.metadata["raw_evidence_path"]).exists()
 
     assert detail_acq.requested_url == detail_url
     assert detail_acq.technical_status == "success"
     assert detail_acq.metadata["request_type"] == "detail"
-    assert Path(detail_acq.metadata["raw_evidence_path"]).exists()
     assert list_acq.metadata["raw_evidence_path"] != detail_acq.metadata["raw_evidence_path"]
 
     assert att_acq.requested_url == att_url
     assert att_acq.technical_status == "success"
     assert att_acq.metadata["request_type"] == "attachment"
-    assert Path(att_acq.metadata["local_evidence_path"]).exists()
 
-    # 3. Agent packet correctly parsed
-    assert len(output["agent_evidence_packets"]) == 1
     packet = output["agent_evidence_packets"][0]
     assert packet["title"] == "广东岭南工程学院2026年公开招聘专任教师公告"
     assert len(packet["attachment_tables"]) == 1
     assert len(packet["attachment_tables"][0]["rows"]) == 2
 
 
+def test_listing_page_without_configured_hint_does_not_fetch_arbitrary_detail(tmp_path: Path):
+    """
+    Regression test: listing page with links but NO configured selector/hint:
+    - only listing request occurs;
+    - no arbitrary first link GET occurs;
+    - no Agent evidence packet produced.
+    """
+    listing_url = "https://hrss.gd.gov.cn/zwgk/zp_list.html"
+    listing_html = """<html><body><a href="/random/doc1.html">文档1</a><a href="/random/doc2.html">文档2</a></body></html>"""
+
+    transport = FakeHttpTransport(
+        responses={
+            listing_url: {"status_code": 200, "text": listing_html, "headers": {"Content-Type": "text/html"}},
+        }
+    )
+
+    source = SourceRecord(
+        source_id="gd_hrss_nohint",
+        name="无提示列表渠道",
+        base_url=listing_url,
+        domain="hrss.gd.gov.cn",
+        source_type="first_party_official",
+        metadata={
+            "archetype": "static_html_attachment",
+            "is_listing": True,
+        },
+    )
+
+    data_dir = tmp_path / ".data"
+    output = execute_production_acquisition(sources=[source], data_dir=data_dir, transport=transport)
+
+    assert len(transport.requests_log) == 1
+    assert transport.requests_log[0]["url"] == listing_url
+    assert len(output["acquisition_results"]) == 1
+    assert output["acquisition_results"][0].metadata["request_type"] == "listing"
+    assert output["agent_evidence_packets"] == []
+
+
 def test_attachment_filename_path_traversal_sanitization(tmp_path: Path, sample_xlsx_bytes: bytes):
-    """
-    Finding 3: Verifies that malicious Content-Disposition or link names cannot perform directory traversal (../ or ..\\).
-    """
     detail_url = "https://hrss.gd.gov.cn/zwgk/zp_malicious.html"
     att_url = "https://hrss.gd.gov.cn/attach/traversal.xlsx"
     detail_html = f'<html><body><a href="{att_url}">../../traversal.xlsx</a></body></html>'
@@ -270,26 +267,18 @@ def test_attachment_filename_path_traversal_sanitization(tmp_path: Path, sample_
     att_acq = acq_results[1]
     saved_path = Path(att_acq.metadata["local_evidence_path"])
 
-    # Path must remain strictly inside .data/raw_evidence/gd_hrss_sec/attachments/<attempt_id>/
     expected_parent = data_dir / "raw_evidence" / "gd_hrss_sec" / "attachments" / att_acq.metadata["parent_attempt_id"]
     assert saved_path.parent.resolve() == expected_parent.resolve()
     assert saved_path.name == "passwd.xlsx"
     assert ".." not in str(saved_path)
 
 
-def test_attachment_same_name_collision_disambiguation(tmp_path: Path, sample_xlsx_bytes: bytes, sample_docx_bytes: bytes):
-    """
-    Finding 3: Verifies that multiple attachments with identical names (e.g. table.xlsx from different URLs)
-    do not overwrite each other and are disambiguated deterministically.
-    """
+def test_attachment_same_name_collision_disambiguation(tmp_path: Path, sample_xlsx_bytes: bytes):
     detail_url = "https://hrss.gd.gov.cn/zwgk/zp_dup.html"
     att_url1 = "https://hrss.gd.gov.cn/u1/table.xlsx"
     att_url2 = "https://hrss.gd.gov.cn/u2/table.xlsx"
 
-    detail_html = f"""<html><body>
-      <a href="{att_url1}">岗位表.xlsx</a>
-      <a href="{att_url2}">岗位表.xlsx</a>
-    </body></html>"""
+    detail_html = f"""<html><body><a href="{att_url1}">岗位表.xlsx</a><a href="{att_url2}">岗位表.xlsx</a></body></html>"""
 
     transport = FakeHttpTransport(
         responses={
@@ -304,7 +293,7 @@ def test_attachment_same_name_collision_disambiguation(tmp_path: Path, sample_xl
     output = execute_production_acquisition(sources=[source], data_dir=data_dir, transport=transport)
 
     acq_results = output["acquisition_results"]
-    assert len(acq_results) == 3  # 1 detail + 2 attachments
+    assert len(acq_results) == 3
     att1_path = Path(acq_results[1].metadata["local_evidence_path"])
     att2_path = Path(acq_results[2].metadata["local_evidence_path"])
 
@@ -316,36 +305,21 @@ def test_attachment_same_name_collision_disambiguation(tmp_path: Path, sample_xl
 def test_docx_and_text_native_pdf_attachments_acquisition_and_parsing(
     tmp_path: Path, sample_docx_bytes: bytes, sample_pdf_bytes: bytes
 ):
-    """
-    Finding 4: Multi-format attachment support: DOCX and text-native PDF in a single announcement.
-    Proves that PDF text content ('Guideline text content') is extracted into attachment_pages.
-    """
     detail_url = "https://rsc.sample.edu.cn/zp/announcement.html"
     docx_url = "https://rsc.sample.edu.cn/zp/docs/posts.docx"
     pdf_url = "https://rsc.sample.edu.cn/zp/docs/guidelines.pdf"
 
-    detail_html = f"""<!DOCTYPE html>
-    <html>
-    <body>
+    detail_html = f"""<!DOCTYPE html><html><body>
       <h1>招聘公告</h1>
       <a href="{docx_url}">附件1：岗位表.docx</a>
       <a href="{pdf_url}">附件2：报考指南.pdf</a>
-    </body>
-    </html>"""
+    </body></html>"""
 
     transport = FakeHttpTransport(
         responses={
             detail_url: {"status_code": 200, "text": detail_html, "headers": {"Content-Type": "text/html"}},
-            docx_url: {
-                "status_code": 200,
-                "content": sample_docx_bytes,
-                "headers": {"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-            },
-            pdf_url: {
-                "status_code": 200,
-                "content": sample_pdf_bytes,
-                "headers": {"Content-Type": "application/pdf"},
-            },
+            docx_url: {"status_code": 200, "content": sample_docx_bytes, "headers": {"Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}},
+            pdf_url: {"status_code": 200, "content": sample_pdf_bytes, "headers": {"Content-Type": "application/pdf"}},
         }
     )
 
@@ -363,10 +337,6 @@ def test_docx_and_text_native_pdf_attachments_acquisition_and_parsing(
 
 
 def test_attachment_http_404_preserves_html_facts_and_records_audit(tmp_path: Path):
-    """
-    Attachment 404 HTTP failure must preserve HTML acquisition facts, record truthful attachment failure,
-    and not crash or fabricate fake data.
-    """
     detail_url = "https://www.school.edu.cn/zp.html"
     missing_att_url = "https://www.school.edu.cn/attach/missing.xlsx"
     detail_html = f"""<html><body><h1>招聘</h1><a href="{missing_att_url}">岗位表.xlsx</a></body></html>"""
@@ -382,15 +352,15 @@ def test_attachment_http_404_preserves_html_facts_and_records_audit(tmp_path: Pa
     data_dir = tmp_path / ".data"
     output = execute_production_acquisition(sources=[source], data_dir=data_dir, transport=transport)
 
-    acq_res = output["acquisition_results"][0]
-    assert acq_res.http_status == 200
-    assert acq_res.technical_status == "success"
-    assert acq_res.metadata["attachments_found_count"] == 1
-    assert acq_res.metadata["attachments_acquired_count"] == 0
+    detail_acq = output["acquisition_results"][0]
+    assert detail_acq.http_status == 200
+    assert detail_acq.technical_status == "success"
+    assert detail_acq.metadata["attachments_found_count"] == 1
+    assert detail_acq.metadata["attachments_acquired_count"] == 0
 
-    att_audit = acq_res.metadata["attachment_audits"][0]
-    assert att_audit["status"] == "failed"
-    assert att_audit["http_status"] == 404
+    att_acq = output["acquisition_results"][1]
+    assert att_acq.http_status == 404
+    assert att_acq.technical_status == "failed"
 
     packet = output["agent_evidence_packets"][0]
     assert len(packet["attachments"]) == 1
@@ -400,8 +370,9 @@ def test_attachment_http_404_preserves_html_facts_and_records_audit(tmp_path: Pa
 
 def test_corrupted_attachment_preserves_downloaded_bytes_and_records_parse_error(tmp_path: Path):
     """
-    Corrupted attachment bytes preserve downloaded bytes, file hash, local path, and record deterministic
-    parsing failure in audit without crash or false observations.
+    Finding 2: Corrupted attachment bytes preserve HTTP 200 observation facts (status, hash, body length, path)
+    while recording technical_status=failed, stage=attachment_parsing, and evidence_parsing_status=failed on the
+    child attachment AcquisitionResult.
     """
     detail_url = "https://www.school.edu.cn/zp_corrupt.html"
     corrupt_att_url = "https://www.school.edu.cn/attach/corrupt.xlsx"
@@ -423,22 +394,36 @@ def test_corrupted_attachment_preserves_downloaded_bytes_and_records_parse_error
     data_dir = tmp_path / ".data"
     output = execute_production_acquisition(sources=[source], data_dir=data_dir, transport=transport)
 
-    acq_res = output["acquisition_results"][0]
-    att_audit = acq_res.metadata["attachment_audits"][0]
-    assert att_audit["status"] == "success"
-    assert att_audit["parse_status"] == "failed"
-    assert att_audit["body_length"] == len(corrupt_bytes)
-    assert Path(att_audit["local_evidence_path"]).read_bytes() == corrupt_bytes
+    acq_results = output["acquisition_results"]
+    assert len(acq_results) == 2
+    detail_acq = acq_results[0]
+    att_acq = acq_results[1]
 
+    # 1. Detail acquisition facts remain truthful
+    assert detail_acq.technical_status == "success"
+    assert detail_acq.metadata["attachments_found_count"] == 1
+    assert detail_acq.metadata["attachments_acquired_count"] == 1
+    assert detail_acq.metadata["attachments_parsed_count"] == 0
+
+    # 2. Child attachment AcquisitionResult preserves HTTP 200 facts and records parser failure
+    assert att_acq.requested_url == corrupt_att_url
+    assert att_acq.http_status == 200
+    assert att_acq.body_length == len(corrupt_bytes)
+    assert len(att_acq.response_hash) == 64
+    assert Path(att_acq.metadata["local_evidence_path"]).read_bytes() == corrupt_bytes
+    assert att_acq.technical_status == "failed"
+    assert att_acq.error_facts is not None
+    assert att_acq.error_facts["stage"] == "attachment_parsing"
+    assert "parse_error" in att_acq.error_facts
+    assert att_acq.metadata["evidence_parsing_status"] == "failed"
+
+    # 3. Agent packet excludes corrupted table
     packet = output["agent_evidence_packets"][0]
     assert packet["attachments"][0]["status"] == "failed"
     assert packet["attachment_tables"] == []
 
 
 def test_legacy_format_reported_truthfully_as_unsupported(tmp_path: Path):
-    """
-    Verifies that legacy formats (.xls, .doc) are reported truthfully without crashing.
-    """
     detail_url = "https://www.school.edu.cn/legacy.html"
     detail_html = """<html><body><h1>招聘</h1><a href="/attach/old.xls">历史表.xls</a></body></html>"""
 

@@ -87,14 +87,12 @@ class AttachmentAcquisitionHelper:
             if any(base.lower().endswith(ext) for ext in SUPPORTED_ATTACHMENT_EXTENSIONS):
                 candidate = base
 
-        # 4. Fallback
+        # 4. Fallback and collision disambiguation
+        url_hash_short = hashlib.sha256(att_url.encode("utf-8")).hexdigest()[:8]
         if not candidate:
             ext = att_meta.get("extension", ".xlsx") or ".xlsx"
-            url_hash = hashlib.sha256(att_url.encode("utf-8")).hexdigest()[:8]
-            candidate = f"attachment_{url_hash}{ext}"
+            candidate = f"attachment_{url_hash_short}{ext}"
 
-        # Collision disambiguation: if seen_filenames has this name for a DIFFERENT url, append url hash
-        url_hash_short = hashlib.sha256(att_url.encode("utf-8")).hexdigest()[:8]
         if seen_filenames is not None:
             if candidate in seen_filenames and seen_filenames[candidate] != att_url:
                 stem, ext = os.path.splitext(candidate)
@@ -277,6 +275,12 @@ class AttachmentAcquisitionHelper:
                 has_err = any(t.get("status") == "error" for t in parsed)
                 if has_err:
                     err_msg = next((t.get("error", "Parse error") for t in parsed if t.get("status") == "error"), "Parse error")
+                    att_acq_res.technical_status = "failed"
+                    att_acq_res.error_facts = {
+                        "parse_error": err_msg,
+                        "stage": "attachment_parsing",
+                    }
+                    att_acq_res.metadata["evidence_parsing_status"] = "failed"
                     reports.append({
                         "name": filename,
                         "url": full_url,
@@ -308,6 +312,13 @@ class AttachmentAcquisitionHelper:
                     })
                     audit_item["parse_status"] = "success"
             except Exception as p_err:
+                att_acq_res.technical_status = "failed"
+                att_acq_res.error_facts = {
+                    "parse_error": str(p_err),
+                    "exception_class": type(p_err).__name__,
+                    "stage": "attachment_parsing",
+                }
+                att_acq_res.metadata["evidence_parsing_status"] = "failed"
                 audit_item["parse_status"] = "failed"
                 audit_item["parse_error"] = str(p_err)
                 reports.append({

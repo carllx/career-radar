@@ -18,6 +18,7 @@ from .sources import MonitoringFact, SourceRecord
 class ListingAcquisitionHelper:
     """
     Handles listing acquisition, evidence persistence, and mechanical detail-URL selection.
+    Requires explicit configuration hints; never falls back to arbitrary unconfigured links.
     """
 
     @staticmethod
@@ -48,12 +49,7 @@ class ListingAcquisitionHelper:
         if link_index is not None and isinstance(link_index, int) and 0 <= link_index < len(links):
             return links[link_index].get("url")
 
-        # 4. Default mechanical selection: first distinct link
-        for lk in links:
-            u = lk.get("url", "")
-            if u and u != listing_url:
-                return u
-
+        # Without an explicit mechanical hint, truthfully return None (do not guess/fall back)
         return None
 
     @staticmethod
